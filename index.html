@@ -33,6 +33,18 @@
   }
   .player-count{font-size:13px;color:#6b7280;margin-left:auto}
 
+  /* zoom controls */
+  .zoom-wrap{display:flex;align-items:center;gap:4px;font-size:13px;color:#4b5563}
+  .zoom-btn{
+    width:28px;height:28px;border:1px solid #d1d5db;border-radius:6px;
+    background:#fff;font-size:16px;line-height:1;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+    transition:all .12s;user-select:none;
+  }
+  .zoom-btn:hover{background:#f3f4f6}
+  .zoom-btn:active{background:#e5e7eb}
+  .zoom-label{font-size:12px;min-width:28px;text-align:center;font-variant-numeric:tabular-nums}
+
   /* mode / year / PA selectors */
   .mode-select,.pa-select{
     padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;
@@ -118,6 +130,12 @@
   <div class="min-pa-wrap">
     Min PA: <input class="min-pa" id="minPA" type="number" value="60" min="1" step="1">
   </div>
+  <div class="zoom-wrap">
+    Chart:
+    <button class="zoom-btn" id="zoomOut">−</button>
+    <span class="zoom-label" id="zoomLabel">1x</span>
+    <button class="zoom-btn" id="zoomIn">+</button>
+  </div>
   <div class="player-count" id="count"></div>
 </div>
 
@@ -193,6 +211,8 @@ const lineMap = new Map();
 let viewMode = 'season';        // 'season' | 'pa'
 let selectedYears = new Set();   // for season mode
 let paWindow = 600;              // for PA mode
+let chartZoom = 1;               // 1x, 2x, 4x, 8x
+const ZOOM_STEPS = [1, 2, 4, 8];
 
 // Current league constants (set from most recent selected year)
 let curLC = { lgwOBA: 0.313, wOBAScale: 1.232, lgRPA: 0.118 };
@@ -300,6 +320,15 @@ function bindControls() {
   document.getElementById('paWindow').addEventListener('change', e => {
     paWindow = parseInt(e.target.value, 10);
     render();
+  });
+
+  document.getElementById('zoomIn').addEventListener('click', () => {
+    const idx = ZOOM_STEPS.indexOf(chartZoom);
+    if (idx < ZOOM_STEPS.length - 1) { chartZoom = ZOOM_STEPS[idx + 1]; applyZoom(); }
+  });
+  document.getElementById('zoomOut').addEventListener('click', () => {
+    const idx = ZOOM_STEPS.indexOf(chartZoom);
+    if (idx > 0) { chartZoom = ZOOM_STEPS[idx - 1]; applyZoom(); }
   });
 
   document.querySelectorAll('#thead-row th[data-key]').forEach(th => {
@@ -442,7 +471,33 @@ function render() {
   });
   tbody.appendChild(frag);
 
-  requestAnimationFrame(drawAllCharts);
+  requestAnimationFrame(() => applyZoom());
+}
+
+/* ================================================================
+   ZOOM
+   ================================================================ */
+function applyZoom() {
+  document.getElementById('zoomLabel').textContent = chartZoom + 'x';
+  const chartTh = document.querySelector('th.col-chart');
+  const chartTds = document.querySelectorAll('td.col-chart');
+  if (chartZoom === 1) {
+    chartTh.style.minWidth = '';
+    chartTds.forEach(td => { td.style.minWidth = ''; td.querySelector('canvas').style.width = '100%'; });
+  } else {
+    // Measure one cell's natural 1x width
+    chartTh.style.minWidth = '';
+    chartTds.forEach(td => { td.style.minWidth = ''; td.querySelector('canvas').style.width = '100%'; });
+    const base = (chartTds[0]?.clientWidth || 600) - 20;
+    const zoomedW = base * chartZoom;
+    const zoomedColW = (zoomedW + 20) + 'px';
+    chartTh.style.minWidth = zoomedColW;
+    chartTds.forEach(td => {
+      td.style.minWidth = zoomedColW;
+      td.querySelector('canvas').style.width = zoomedW + 'px';
+    });
+  }
+  drawAllCharts();
 }
 
 /* ================================================================
