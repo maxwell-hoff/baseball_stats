@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MLB At-Bat Dashboard</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+    background:#f5f6f8;color:#1a1a2e;padding:28px 32px;
+  }
+
+  /* ── Header ────────────────────────────────────────────────── */
+  .header{margin-bottom:20px}
+  .header h1{font-size:22px;font-weight:700;letter-spacing:-.3px}
+  .header .meta{font-size:13px;color:#6b7280;margin-top:4px}
+
+  /* ── Controls ──────────────────────────────────────────────── */
+  .controls{
+    display:flex;flex-wrap:wrap;gap:14px;align-items:center;
+    margin-bottom:16px;
+  }
+  .search{
+    padding:7px 12px;border:1px solid #d1d5db;border-radius:6px;
+    font-size:14px;width:260px;outline:none;transition:border .15s;
+  }
+  .search:focus{border-color:#6366f1}
+  .min-pa-wrap{display:flex;align-items:center;gap:6px;font-size:13px;color:#4b5563}
+  .min-pa{
+    width:64px;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;
+    font-size:13px;text-align:center;outline:none;
+  }
+  .player-count{font-size:13px;color:#6b7280;margin-left:auto}
+
+  /* ── Legend ─────────────────────────────────────────────────── */
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:18px;font-size:12px;color:#4b5563}
+  .legend-item{display:flex;align-items:center;gap:4px}
+  .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+
+  /* ── Table ──────────────────────────────────────────────────── */
+  .table-wrap{
+    background:#fff;border-radius:10px;
+    box-shadow:0 1px 3px rgba(0,0,0,.08);overflow-x:auto;
+  }
+  table{width:100%;border-collapse:collapse;min-width:960px}
+  thead th{
+    position:sticky;top:0;z-index:2;
+    background:#f9fafb;padding:10px 14px;text-align:left;
+    font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;
+    color:#6b7280;border-bottom:2px solid #e5e7eb;cursor:pointer;user-select:none;
+    white-space:nowrap;
+  }
+  thead th:hover{color:#1a1a2e}
+  thead th .arrow{font-size:10px;margin-left:3px;opacity:.5}
+  thead th.active .arrow{opacity:1;color:#6366f1}
+  tbody td{padding:6px 14px;border-bottom:1px solid #f3f4f6;font-size:14px;vertical-align:middle}
+  tbody tr:hover{background:#fafaff}
+  .col-rank{width:44px;color:#9ca3af;text-align:right;font-variant-numeric:tabular-nums}
+  .col-name{width:180px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .col-team{width:52px;font-size:12px;color:#6b7280;text-align:center}
+  .col-num{width:62px;text-align:right;font-variant-numeric:tabular-nums}
+  .col-chart{min-width:500px;padding:4px 10px !important}
+  .col-chart canvas{display:block;width:100%;height:56px}
+
+  /* ── Tooltip ────────────────────────────────────────────────── */
+  #tooltip{
+    position:fixed;pointer-events:none;z-index:100;
+    background:#1e1e2f;color:#f0f0f0;padding:6px 10px;border-radius:6px;
+    font-size:12px;line-height:1.4;white-space:nowrap;
+    box-shadow:0 4px 12px rgba(0,0,0,.25);opacity:0;transition:opacity .1s;
+  }
+
+  /* ── Loading / error states ──────────────────────────────── */
+  .msg{text-align:center;padding:60px 20px;color:#6b7280;font-size:15px}
+  .msg.error{color:#dc2626}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>MLB Plate Appearance Dashboard</h1>
+  <div class="meta">
+    <span id="season"></span>
+    &nbsp;·&nbsp; <span id="updated"></span>
+    &nbsp;·&nbsp; Run values = wOBA linear weights (<span id="wt-year"></span>)
+  </div>
+</div>
+
+<div class="controls">
+  <input class="search" id="search" type="text" placeholder="Search player…">
+  <div class="min-pa-wrap">
+    Min PA: <input class="min-pa" id="minPA" type="number" value="1" min="1" step="1">
+  </div>
+  <div class="player-count" id="count"></div>
+</div>
+
+<div class="legend" id="legend"></div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr id="thead-row">
+        <th class="col-rank">#</th>
+        <th class="col-name" data-key="name">Player <span class="arrow"></span></th>
+        <th class="col-team">Team</th>
+        <th class="col-num" data-key="pa">PA <span class="arrow"></span></th>
+        <th class="col-num" data-key="hits">Hits <span class="arrow"></span></th>
+        <th class="col-num" data-key="walks">BB <span class="arrow"></span></th>
+        <th class="col-chart">Plate Appearance Run Values</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+/* ================================================================
+   CONFIG
+   ================================================================ */
+const EVENT_COLORS = {
+  home_run:     '#ef4444',
+  triple:       '#f97316',
+  double:       '#eab308',
+  single:       '#22c55e',
+  walk:         '#3b82f6',
+  intent_walk:  '#3b82f6',
+  hit_by_pitch: '#a855f7',
+};
+const OUT_COLOR = '#d4d4d8';
+const Y_MAX = 5;
+
+const LEGEND_ITEMS = [
+  ['HR',  EVENT_COLORS.home_run],
+  ['3B',  EVENT_COLORS.triple],
+  ['2B',  EVENT_COLORS.double],
+  ['1B',  EVENT_COLORS.single],
+  ['BB',  EVENT_COLORS.walk],
+  ['HBP', EVENT_COLORS.hit_by_pitch],
+  ['Out', OUT_COLOR],
+];
+
+/* ================================================================
+   STATE
+   ================================================================ */
+let DATA = null;
+let sort = { key: 'hits', dir: 'desc' };
+let filtered = [];
+let dateMin, dateMax;
+const canvasMap = new Map();   // canvas element → player obj
+const pointsMap = new Map();   // canvas element → [{x,y,evt,date,rv}]
+
+/* ================================================================
+   BOOT
+   ================================================================ */
+document.addEventListener('DOMContentLoaded', async () => {
+  buildLegend();
+  try {
+    const resp = await fetch('data/player_data.json');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    DATA = await resp.json();
+  } catch (e) {
+    document.getElementById('tbody').innerHTML =
+      `<tr><td colspan="7" class="msg error">
+         Could not load data/player_data.json — run <code>python fetch_data.py</code> first.
+       </td></tr>`;
+    return;
+  }
+
+  document.getElementById('season').textContent = DATA.season + ' Season';
+  document.getElementById('updated').textContent =
+    'Updated ' + new Date(DATA.last_updated).toLocaleString();
+  document.getElementById('wt-year').textContent = DATA.weights_source_year;
+
+  computeDateExtent();
+  bindControls();
+  render();
+});
+
+function computeDateExtent() {
+  let lo = Infinity, hi = -Infinity;
+  for (const p of DATA.players) {
+    for (const [d] of p.events) {
+      const t = new Date(d + 'T12:00:00').getTime();
+      if (t < lo) lo = t;
+      if (t > hi) hi = t;
+    }
+  }
+  dateMin = lo;
+  dateMax = hi;
+}
+
+/* ================================================================
+   LEGEND
+   ================================================================ */
+function buildLegend() {
+  const el = document.getElementById('legend');
+  el.innerHTML = LEGEND_ITEMS.map(([label, color]) =>
+    `<div class="legend-item"><span class="dot" style="background:${color}"></span>${label}</div>`
+  ).join('');
+}
+
+/* ================================================================
+   CONTROLS — search, min PA, column sort
+   ================================================================ */
+function bindControls() {
+  document.getElementById('search').addEventListener('input', render);
+  document.getElementById('minPA').addEventListener('input', render);
+
+  document.querySelectorAll('#thead-row th[data-key]').forEach(th => {
+    th.addEventListener('click', () => {
+      const key = th.dataset.key;
+      if (sort.key === key) {
+        sort.dir = sort.dir === 'desc' ? 'asc' : 'desc';
+      } else {
+        sort.key = key;
+        sort.dir = key === 'name' ? 'asc' : 'desc';
+      }
+      render();
+    });
+  });
+}
+
+/* ================================================================
+   RENDER
+   ================================================================ */
+function render() {
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const minPA = Math.max(1, parseInt(document.getElementById('minPA').value, 10) || 1);
+
+  filtered = DATA.players.filter(p => {
+    if (p.pa < minPA) return false;
+    if (q && !p.name.toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  const dir = sort.dir === 'desc' ? -1 : 1;
+  if (sort.key === 'name') {
+    filtered.sort((a, b) => dir * a.name.localeCompare(b.name));
+  } else {
+    filtered.sort((a, b) => dir * (a[sort.key] - b[sort.key]));
+  }
+
+  // update header arrows
+  document.querySelectorAll('#thead-row th[data-key]').forEach(th => {
+    const active = th.dataset.key === sort.key;
+    th.classList.toggle('active', active);
+    th.querySelector('.arrow').textContent = active ? (sort.dir === 'desc' ? '▼' : '▲') : '';
+  });
+
+  document.getElementById('count').textContent = `${filtered.length} players`;
+
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  canvasMap.clear();
+  pointsMap.clear();
+
+  const frag = document.createDocumentFragment();
+  filtered.forEach((p, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="col-rank">${i + 1}</td>
+      <td class="col-name" title="${p.name}">${p.name}</td>
+      <td class="col-team">${p.team}</td>
+      <td class="col-num">${p.pa}</td>
+      <td class="col-num">${p.hits}</td>
+      <td class="col-num">${p.walks}</td>
+      <td class="col-chart"><canvas></canvas></td>`;
+    frag.appendChild(tr);
+    canvasMap.set(tr.querySelector('canvas'), p);
+  });
+  tbody.appendChild(frag);
+
+  requestAnimationFrame(drawAllCharts);
+}
+
+/* ================================================================
+   CANVAS SCATTER CHARTS
+   ================================================================ */
+function drawAllCharts() {
+  canvasMap.forEach((player, canvas) => {
+    const td = canvas.parentElement;
+    const cssW = td.clientWidth - 20;   // padding offset
+    const cssH = 56;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width  = cssW * dpr;
+    canvas.height = cssH * dpr;
+    canvas.style.width  = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    drawScatter(ctx, canvas, player.events, cssW, cssH);
+  });
+}
+
+function drawScatter(ctx, canvas, events, w, h) {
+  const pad = { top: 4, right: 6, bottom: 12, left: 6 };
+  const pw = w - pad.left - pad.right;
+  const ph = h - pad.top - pad.bottom;
+
+  const MS_PER_DAY = 86400000;
+  const dayWidthPx = (MS_PER_DAY / (dateMax - dateMin)) * pw;
+
+  const xScale = d => pad.left + ((d - dateMin) / (dateMax - dateMin)) * pw;
+  const yScale = v => pad.top + ph - (v / Y_MAX) * ph;
+
+  // gridlines at y = 1, 2
+  ctx.strokeStyle = '#f0f0f0';
+  ctx.lineWidth = 0.5;
+  for (const g of [1, 2]) {
+    const gy = yScale(g);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, gy);
+    ctx.lineTo(w - pad.right, gy);
+    ctx.stroke();
+  }
+
+  // baseline
+  ctx.strokeStyle = '#e5e7eb';
+  ctx.lineWidth = 0.7;
+  const baseY = yScale(0);
+  ctx.beginPath();
+  ctx.moveTo(pad.left, baseY);
+  ctx.lineTo(w - pad.right, baseY);
+  ctx.stroke();
+
+  // month labels along x
+  ctx.fillStyle = '#b0b0b0';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const startMonth = new Date(dateMin).getMonth();
+  const endMonth = new Date(dateMax).getMonth();
+  for (let m = startMonth; m <= endMonth; m++) {
+    const yr = new Date(dateMin).getFullYear();
+    const t = new Date(yr, m, 15).getTime();
+    if (t >= dateMin && t <= dateMax) {
+      ctx.fillText(months[m], xScale(t), h - 1);
+    }
+  }
+
+  // Pre-compute intra-day x-offsets so PAs on the same date spread out.
+  // Group by date, sort within each group by at_bat_number (index 3).
+  const byDate = new Map();
+  for (const e of events) {
+    const d = e[0];
+    if (!byDate.has(d)) byDate.set(d, []);
+    byDate.get(d).push(e);
+  }
+  for (const group of byDate.values()) {
+    group.sort((a, b) => a[3] - b[3]);
+  }
+
+  // Build draw list: outs first (behind), then positive events on top
+  const drawList = [];
+  for (const [dateStr, group] of byDate) {
+    const n = group.length;
+    const spread = Math.min(dayWidthPx * 0.8, n * 3);
+    group.forEach((e, i) => {
+      const frac = n > 1 ? (i / (n - 1)) - 0.5 : 0;
+      drawList.push({ e, xOff: frac * spread });
+    });
+  }
+  drawList.sort((a, b) => a.e[2] - b.e[2]);
+
+  const pts = [];
+  for (const { e, xOff } of drawList) {
+    const [dateStr, evt, rv] = e;
+    const t = new Date(dateStr + 'T12:00:00').getTime();
+    const x = xScale(t) + xOff;
+    const y = yScale(rv);
+    const isOut = !(evt in EVENT_COLORS);
+    const color = EVENT_COLORS[evt] || OUT_COLOR;
+    const r = isOut ? 1.8 : 3;
+    const alpha = isOut ? 0.25 : 0.75;
+
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    pts.push({ x, y, r: Math.max(r, 5), evt, date: dateStr, rv });
+  }
+  ctx.globalAlpha = 1;
+  pointsMap.set(canvas, pts);
+}
+
+/* ================================================================
+   TOOLTIP
+   ================================================================ */
+const tooltip = document.getElementById('tooltip');
+const PRETTY = {
+  home_run: 'Home Run', triple: 'Triple', double: 'Double', single: 'Single',
+  walk: 'Walk', intent_walk: 'Int. Walk', hit_by_pitch: 'HBP',
+  strikeout: 'Strikeout', strikeout_double_play: 'Strikeout (DP)',
+  field_out: 'Field Out', force_out: 'Force Out',
+  grounded_into_double_play: 'GIDP', double_play: 'Double Play',
+  triple_play: 'Triple Play', fielders_choice: "Fielder's Choice",
+  fielders_choice_out: "FC Out", field_error: 'Error',
+  sac_fly: 'Sac Fly', sac_bunt: 'Sac Bunt',
+  sac_fly_double_play: 'Sac Fly (DP)', sac_bunt_double_play: 'Sac Bunt (DP)',
+  catcher_interf: "Catcher's Int.", other_out: 'Out',
+};
+
+document.addEventListener('mousemove', e => {
+  const canvas = e.target.closest?.('canvas');
+  if (!canvas || !pointsMap.has(canvas)) { tooltip.style.opacity = 0; return; }
+
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const mx = (e.clientX - rect.left);
+  const my = (e.clientY - rect.top);
+
+  const pts = pointsMap.get(canvas);
+  let best = null, bestDist = 12;
+  for (const p of pts) {
+    // scale stored coords from CSS-pixel space
+    const cssX = p.x;
+    const cssY = p.y;
+    const d = Math.hypot(mx - cssX, my - cssY);
+    if (d < bestDist) { bestDist = d; best = p; }
+  }
+
+  if (!best) { tooltip.style.opacity = 0; return; }
+  tooltip.style.opacity = 1;
+  tooltip.style.left = (e.clientX + 14) + 'px';
+  tooltip.style.top  = (e.clientY - 10) + 'px';
+  tooltip.innerHTML = `<strong>${PRETTY[best.evt] || best.evt}</strong><br>` +
+    `${best.date} · Run value ${best.rv.toFixed(3)}`;
+});
+
+/* ── Resize handler ──────────────────────────────────────────── */
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (DATA) drawAllCharts(); }, 150);
+});
+</script>
+</body>
+</html>
