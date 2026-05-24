@@ -216,11 +216,18 @@ def main():
         "home_run": weights["wHR"],
     }
 
+    league_constants = {
+        "lgwOBA": weights["lgwOBA"],
+        "wOBAScale": weights["wOBAScale"],
+        "lgRPA": weights["lgRPA"],
+    }
+
     output = {
         "last_updated": datetime.now().isoformat(timespec="seconds"),
         "season": year,
         "weights_source_year": weights_year,
         "linear_weights": readable_weights,
+        "league_constants": league_constants,
         "players": player_list,
     }
 

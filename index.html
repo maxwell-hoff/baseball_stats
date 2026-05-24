@@ -132,6 +132,16 @@ const EVENT_COLORS = {
 };
 const OUT_COLOR = '#1c1c1f';
 const Y_MAX = 5;
+const WRC_PLUS_MIN = 0;
+const WRC_PLUS_MAX = 250;
+const WRC_LINE_COLOR = '#6366f1';
+const WRC_LINE_MIN_PA = 10;
+
+const WOBA_DENOM_EXCLUDE = new Set([
+  'intent_walk', 'sac_bunt', 'sac_bunt_double_play', 'catcher_interf',
+]);
+
+let lgwOBA, wOBAScale, lgRPA;
 
 const LEGEND_ITEMS = [
   ['HR',  EVENT_COLORS.home_run],
@@ -141,6 +151,7 @@ const LEGEND_ITEMS = [
   ['BB',  EVENT_COLORS.walk],
   ['HBP', EVENT_COLORS.hit_by_pitch],
   ['Out', OUT_COLOR],
+  ['wRC+', WRC_LINE_COLOR],
 ];
 
 /* ================================================================
@@ -175,6 +186,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     'Updated ' + new Date(DATA.last_updated).toLocaleString();
   document.getElementById('wt-year').textContent = DATA.weights_source_year;
 
+  lgwOBA = DATA.league_constants.lgwOBA;
+  wOBAScale = DATA.league_constants.wOBAScale;
+  lgRPA = DATA.league_constants.lgRPA;
+
   computeDateExtent();
   bindControls();
   render();
@@ -198,9 +213,12 @@ function computeDateExtent() {
    ================================================================ */
 function buildLegend() {
   const el = document.getElementById('legend');
-  el.innerHTML = LEGEND_ITEMS.map(([label, color]) =>
-    `<div class="legend-item"><span class="dot" style="background:${color}"></span>${label}</div>`
-  ).join('');
+  el.innerHTML = LEGEND_ITEMS.map(([label, color]) => {
+    if (label === 'wRC+') {
+      return `<div class="legend-item"><span style="width:16px;height:2px;background:${color};border-radius:1px"></span>${label}</div>`;
+    }
+    return `<div class="legend-item"><span class="dot" style="background:${color}"></span>${label}</div>`;
+  }).join('');
 }
 
 /* ================================================================
@@ -299,7 +317,7 @@ function drawAllCharts() {
 }
 
 function drawScatter(ctx, canvas, events, w, h) {
-  const pad = { top: 4, right: 6, bottom: 12, left: 6 };
+  const pad = { top: 4, right: 30, bottom: 12, left: 6 };
   const pw = w - pad.left - pad.right;
   const ph = h - pad.top - pad.bottom;
 
@@ -308,8 +326,12 @@ function drawScatter(ctx, canvas, events, w, h) {
 
   const xScale = d => pad.left + ((d - dateMin) / (dateMax - dateMin)) * pw;
   const yScale = v => pad.top + ph - (v / Y_MAX) * ph;
+  const yScaleWrc = v => {
+    const clamped = Math.max(WRC_PLUS_MIN, Math.min(WRC_PLUS_MAX, v));
+    return pad.top + ph - ((clamped - WRC_PLUS_MIN) / (WRC_PLUS_MAX - WRC_PLUS_MIN)) * ph;
+  };
 
-  // gridlines at y = 1, 2
+  // gridlines at y = 1, 2 (left axis)
   ctx.strokeStyle = '#f0f0f0';
   ctx.lineWidth = 0.5;
   for (const g of [1, 2]) {
@@ -319,6 +341,23 @@ function drawScatter(ctx, canvas, events, w, h) {
     ctx.lineTo(w - pad.right, gy);
     ctx.stroke();
   }
+
+  // wRC+ = 100 reference line (dashed)
+  ctx.strokeStyle = '#c7c7cc';
+  ctx.lineWidth = 0.5;
+  ctx.setLineDash([3, 3]);
+  const y100 = yScaleWrc(100);
+  ctx.beginPath();
+  ctx.moveTo(pad.left, y100);
+  ctx.lineTo(w - pad.right, y100);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // right-axis label: "100"
+  ctx.fillStyle = '#9ca3af';
+  ctx.font = '8px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('100', w - pad.right + 3, y100 + 3);
 
   // baseline
   ctx.strokeStyle = '#e5e7eb';
@@ -345,7 +384,6 @@ function drawScatter(ctx, canvas, events, w, h) {
   }
 
   // Pre-compute intra-day x-offsets so PAs on the same date spread out.
-  // Group by date, sort within each group by at_bat_number (index 3).
   const byDate = new Map();
   for (const e of events) {
     const d = e[0];
@@ -388,6 +426,42 @@ function drawScatter(ctx, canvas, events, w, h) {
     pts.push({ x, y, r: Math.max(r, 5), evt, date: dateStr, rv });
   }
   ctx.globalAlpha = 1;
+
+  // ── Running wRC+ line (right y-axis) ──────────────────────────
+  // Events are already sorted chronologically. Walk through them in
+  // order, accumulate wOBA numerator/denominator, compute wRC+ after
+  // each PA, and plot once we hit WRC_LINE_MIN_PA.
+  const chronological = [...events].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
+  let wobaNumer = 0, wobaDenom = 0, paCount = 0;
+  const linePoints = [];
+
+  for (const [dateStr, evt, rv] of chronological) {
+    wobaNumer += rv;
+    if (!WOBA_DENOM_EXCLUDE.has(evt)) wobaDenom++;
+    paCount++;
+
+    if (paCount >= WRC_LINE_MIN_PA && wobaDenom > 0) {
+      const woba = wobaNumer / wobaDenom;
+      const wraaPerPa = (woba - lgwOBA) / wOBAScale;
+      const wrcPlus = ((wraaPerPa + lgRPA) / lgRPA) * 100;
+      const t = new Date(dateStr + 'T12:00:00').getTime();
+      linePoints.push({ x: xScale(t), y: yScaleWrc(wrcPlus), wrcPlus });
+    }
+  }
+
+  if (linePoints.length > 1) {
+    ctx.beginPath();
+    ctx.moveTo(linePoints[0].x, linePoints[0].y);
+    for (let i = 1; i < linePoints.length; i++) {
+      ctx.lineTo(linePoints[i].x, linePoints[i].y);
+    }
+    ctx.strokeStyle = WRC_LINE_COLOR;
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.7;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
   pointsMap.set(canvas, pts);
 }
 
