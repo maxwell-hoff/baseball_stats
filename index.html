@@ -569,20 +569,39 @@ function drawScatter(ctx, canvas, displayEvents, statEvents, w, h) {
   }
   ctx.globalAlpha = 1;
 
-  // ── Running wRC+ line (uses stat events so final value matches the table) ──
-  const chronological = [...statEvents].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
-  let wobaNumer = 0, wobaDenom = 0, paCount = 0;
+  // ── Running wRC+ line ──────────────────────────────────────
+  // "By PAs" mode: rolling window over ALL events (displayEvents) so the
+  //   line shows what the player's trailing-N-PA wRC+ was at each moment.
+  // "By Season" mode: simple cumulative over statEvents.
+  const useRolling = viewMode === 'pa';
+  const lineSource = useRolling ? displayEvents : statEvents;
+  const chronological = [...lineSource].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
+
+  let wobaNumer = 0, wobaDenom = 0;
+  const window = [];  // sliding window of { rv, inDenom }
   const linePoints = [];
+
   for (const [dateStr, evt, rv] of chronological) {
+    window.push({ rv, inDenom: !WOBA_DENOM_EXCLUDE.has(evt) });
     wobaNumer += rv;
     if (!WOBA_DENOM_EXCLUDE.has(evt)) wobaDenom++;
-    paCount++;
-    if (paCount >= WRC_LINE_MIN_PA && wobaDenom > 0) {
+
+    // In rolling mode, evict oldest events beyond the window size
+    if (useRolling) {
+      while (window.length > paWindow) {
+        const old = window.shift();
+        wobaNumer -= old.rv;
+        if (old.inDenom) wobaDenom--;
+      }
+    }
+
+    const minPA = useRolling ? Math.min(paWindow, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA;
+    if (window.length >= minPA && wobaDenom > 0) {
       const woba = wobaNumer / wobaDenom;
       const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
       const wrcPlus = ((wraaPerPa + curLC.lgRPA) / curLC.lgRPA) * 100;
       const t = new Date(dateStr + 'T12:00:00').getTime();
-      linePoints.push({ x: xScale(t), y: yScaleWrc(wrcPlus), wrcPlus, paNum: paCount, date: dateStr });
+      linePoints.push({ x: xScale(t), y: yScaleWrc(wrcPlus), wrcPlus, paNum: window.length, date: dateStr });
     }
   }
   if (linePoints.length > 1) {
@@ -650,8 +669,9 @@ document.addEventListener('mousemove', e => {
     tooltip.style.opacity = 1;
     tooltip.style.left = (e.clientX + 14) + 'px';
     tooltip.style.top  = (e.clientY - 10) + 'px';
+    const windowLabel = viewMode === 'pa' ? ` (last ${bestLine.paNum} PA)` : ` · After ${bestLine.paNum} PA`;
     tooltip.innerHTML = `<strong>wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
-      `${bestLine.date} · After ${bestLine.paNum} PA`;
+      `${bestLine.date}${windowLabel}`;
   } else {
     tooltip.style.opacity = 0;
   }
