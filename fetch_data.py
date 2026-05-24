@@ -28,10 +28,12 @@ WEIGHTS_BY_YEAR = {
     2024: {
         "wBB": 0.689, "wHBP": 0.720, "w1B": 0.882,
         "w2B": 1.254, "w3B": 1.590, "wHR": 2.050,
+        "lgwOBA": 0.310, "wOBAScale": 1.242, "lgRPA": 0.117,
     },
     2025: {
         "wBB": 0.691, "wHBP": 0.722, "w1B": 0.882,
         "w2B": 1.252, "w3B": 1.584, "wHR": 2.037,
+        "lgwOBA": 0.313, "wOBAScale": 1.232, "lgRPA": 0.118,
     },
 }
 
@@ -48,6 +50,9 @@ EVENT_WEIGHT_KEY = {
 
 HIT_EVENTS = {"single", "double", "triple", "home_run"}
 WALK_EVENTS = {"walk", "intent_walk"}
+
+# Events excluded from the wOBA denominator (AB + BB - IBB + SF + HBP)
+WOBA_DENOM_EXCLUDE = {"intent_walk", "sac_bunt", "sac_bunt_double_play", "catcher_interf"}
 
 # Events that end a plate appearance (excludes baserunning events like
 # caught_stealing, pickoff, etc. that also appear in the events column)
@@ -104,15 +109,23 @@ def build_player_json(df: pd.DataFrame, weights: dict) -> list[dict]:
         axis=1,
     )
 
+    # player_name column is the *pitcher*, not the batter.
+    # Look up batter names from their MLBAM IDs.
+    batter_ids = pa["batter"].unique().tolist()
+    print(f"  Looking up names for {len(batter_ids):,} unique batters …")
+    name_df = pybaseball.playerid_reverse_lookup(batter_ids, key_type="mlbam")
+    batter_names: dict[int, str] = {}
+    for _, row in name_df.iterrows():
+        first = str(row["name_first"]).strip().title()
+        last = str(row["name_last"]).strip().title()
+        batter_names[int(row["key_mlbam"])] = f"{first} {last}"
+
     players: dict[int, dict] = {}
     for row in pa.itertuples(index=False):
         bid = int(row.batter)
         if bid not in players:
-            name_raw = row.player_name  # "Last, First"
-            parts = name_raw.split(", ", 1)
-            display = f"{parts[1]} {parts[0]}" if len(parts) == 2 else name_raw
             players[bid] = {
-                "name": display,
+                "name": batter_names.get(bid, f"Unknown ({bid})"),
                 "team": "",
                 "pa": 0,
                 "hits": 0,
@@ -120,6 +133,8 @@ def build_player_json(df: pd.DataFrame, weights: dict) -> list[dict]:
                 "events": [],
                 "_last_date": "",
                 "_team_for_last": "",
+                "_woba_numer": 0.0,
+                "_woba_denom": 0,
             }
 
         p = players[bid]
@@ -128,6 +143,10 @@ def build_player_json(df: pd.DataFrame, weights: dict) -> list[dict]:
             p["hits"] += 1
         if row.events in WALK_EVENTS:
             p["walks"] += 1
+
+        p["_woba_numer"] += row.run_value
+        if row.events not in WOBA_DENOM_EXCLUDE:
+            p["_woba_denom"] += 1
 
         p["events"].append([
             row.game_date_str,
@@ -140,9 +159,25 @@ def build_player_json(df: pd.DataFrame, weights: dict) -> list[dict]:
             p["_last_date"] = row.game_date_str
             p["_team_for_last"] = row.batting_team
 
+    lg_woba = weights["lgwOBA"]
+    woba_scale = weights["wOBAScale"]
+    lg_rpa = weights["lgRPA"]
+
     for p in players.values():
         p["team"] = p.pop("_team_for_last", "")
         p.pop("_last_date", None)
+
+        denom = p.pop("_woba_denom")
+        numer = p.pop("_woba_numer")
+        woba = numer / denom if denom > 0 else 0.0
+        p["woba"] = round(woba, 3)
+        # wRC+ ≈ ( wRAA/PA + lgR/PA ) / lgR/PA * 100
+        # Simplified form without park factor:
+        # wRC+ = ((wOBA - lgwOBA) / wOBAScale + lgR/PA) / lgR/PA * 100
+        wraa_per_pa = (woba - lg_woba) / woba_scale
+        wrc_plus = ((wraa_per_pa + lg_rpa) / lg_rpa) * 100
+        p["wrc_plus"] = round(wrc_plus, 0)
+
         p["events"].sort(key=lambda e: (e[0], e[3]))
 
     return sorted(players.values(), key=lambda p: p["hits"], reverse=True)

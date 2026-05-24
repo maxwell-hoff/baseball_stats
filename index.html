@@ -104,6 +104,7 @@
         <th class="col-rank">#</th>
         <th class="col-name" data-key="name">Player <span class="arrow"></span></th>
         <th class="col-team">Team</th>
+        <th class="col-num" data-key="wrc_plus">wRC+ <span class="arrow"></span></th>
         <th class="col-num" data-key="pa">PA <span class="arrow"></span></th>
         <th class="col-num" data-key="hits">Hits <span class="arrow"></span></th>
         <th class="col-num" data-key="walks">BB <span class="arrow"></span></th>
@@ -163,7 +164,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     DATA = await resp.json();
   } catch (e) {
     document.getElementById('tbody').innerHTML =
-      `<tr><td colspan="7" class="msg error">
+      `<tr><td colspan="8" class="msg error">
          Could not load data/player_data.json — run <code>python fetch_data.py</code> first.
        </td></tr>`;
     return;
@@ -264,6 +265,7 @@ function render() {
       <td class="col-rank">${i + 1}</td>
       <td class="col-name" title="${p.name}">${p.name}</td>
       <td class="col-team">${p.team}</td>
+      <td class="col-num">${Math.round(p.wrc_plus)}</td>
       <td class="col-num">${p.pa}</td>
       <td class="col-num">${p.hits}</td>
       <td class="col-num">${p.walks}</td>
@@ -374,8 +376,8 @@ function drawScatter(ctx, canvas, events, w, h) {
     const y = yScale(rv);
     const isOut = !(evt in EVENT_COLORS);
     const color = EVENT_COLORS[evt] || OUT_COLOR;
-    const r = isOut ? 1.8 : 3;
-    const alpha = isOut ? 0.25 : 0.75;
+    const r = isOut ? 1.5 : 2.2;
+    const alpha = isOut ? 0.45 : 0.8;
 
     ctx.globalAlpha = alpha;
     ctx.fillStyle = color;
