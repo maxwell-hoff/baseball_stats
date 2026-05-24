@@ -89,6 +89,18 @@
   .col-chart{min-width:500px;padding:4px 10px !important}
   .col-chart canvas{display:block;width:100%;height:56px}
 
+  /* ── Team expand/collapse ────────────────────────────────────── */
+  .team-row{cursor:pointer}
+  .team-row:hover{background:#f0f0ff !important}
+  .expand-arrow{
+    display:inline-block;width:14px;font-size:9px;
+    transition:transform .15s;text-align:center;color:#9ca3af;
+  }
+  .expand-arrow.open{transform:rotate(90deg)}
+  .player-subrow td{background:#fafbfc;border-bottom:1px solid #eef0f2}
+  .player-subrow .col-name{padding-left:32px !important;font-weight:400;font-size:13px}
+  .player-subrow .col-rank{color:transparent}
+
   /* ── Tooltip ────────────────────────────────────────────────── */
   #tooltip{
     position:fixed;pointer-events:none;z-index:100;
@@ -123,8 +135,8 @@
   <div class="year-btns" id="yearBtns"></div>
 
   <select class="pa-select hidden" id="paWindow">
-    <option value="600">Last 600 PA</option>
-    <option value="60">Last 60 PA</option>
+    <option value="season">Season (~6,000/team, ~600/player)</option>
+    <option value="month">Month (~1,000/team, ~60/player)</option>
   </select>
 
   <select class="mode-select" id="groupBy">
@@ -216,14 +228,15 @@ const lineMap = new Map();
 
 let viewMode = 'season';        // 'season' | 'pa'
 let selectedYears = new Set();   // for season mode
-let paWindow = 600;              // for PA mode
+let paWindowKey = 'season';      // 'season' | 'month'
 let chartZoom = 1;               // 1x, 2x, 4x, 8x
 const ZOOM_STEPS = [1, 2, 4, 8];
 let groupBy = 'player';          // 'player' | 'team-asis' | 'team-aswas'
+const expandedTeams = new Set();
 
-const PA_OPTIONS = {
-  player: [{ value: 600, label: 'Last 600 PA' }, { value: 60, label: 'Last 60 PA' }],
-  team:   [{ value: 6000, label: 'Last 6,000 PA (~season)' }, { value: 1000, label: 'Last 1,000 PA (~month)' }],
+const PA_WINDOWS = {
+  season: { team: 6000, player: 600 },
+  month:  { team: 1000, player: 60 },
 };
 
 // Current league constants (set from most recent selected year)
@@ -273,13 +286,6 @@ function syncLC() {
   if (DATA.league_constants[key]) {
     curLC = DATA.league_constants[key];
   }
-}
-
-function syncPaOptions() {
-  const opts = groupBy.startsWith('team') ? PA_OPTIONS.team : PA_OPTIONS.player;
-  const sel = document.getElementById('paWindow');
-  sel.innerHTML = opts.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
-  paWindow = opts[0].value;
 }
 
 /* ================================================================
@@ -332,7 +338,7 @@ function bindControls() {
     groupBy = e.target.value;
     document.getElementById('search').placeholder =
       groupBy.startsWith('team') ? 'Search team…' : 'Search player…';
-    syncPaOptions();
+    expandedTeams.clear();
     render();
   });
 
@@ -345,7 +351,7 @@ function bindControls() {
   });
 
   document.getElementById('paWindow').addEventListener('change', e => {
-    paWindow = parseInt(e.target.value, 10);
+    paWindowKey = e.target.value;
     render();
   });
 
@@ -375,12 +381,12 @@ function bindControls() {
 /* ================================================================
    EVENT FILTERING & STAT COMPUTATION
    ================================================================ */
-function getEventsForPlayer(player) {
+function getEventsForEntity(entity, paCount) {
   if (viewMode === 'season') {
-    const evts = player.events.filter(e => selectedYears.has(parseInt(e[0].substring(0, 4))));
+    const evts = entity.events.filter(e => selectedYears.has(parseInt(e[0].substring(0, 4))));
     return { display: evts, stats: evts };
   }
-  return { display: player.events, stats: player.events.slice(-paWindow) };
+  return { display: entity.events, stats: entity.events.slice(-paCount) };
 }
 
 function buildTeamRows(mode) {
@@ -410,6 +416,20 @@ function buildTeamRows(mode) {
   }
 
   return [...teams.values()];
+}
+
+function getPlayersForTeam(teamAbbr) {
+  if (groupBy === 'team-asis') {
+    return DATA.players.filter(p => p.team === teamAbbr);
+  }
+  const result = [];
+  for (const p of DATA.players) {
+    const teamEvents = p.events.filter(e => e[4] === teamAbbr);
+    if (teamEvents.length > 0) {
+      result.push({ ...p, events: teamEvents });
+    }
+  }
+  return result;
 }
 
 function computeStats(events) {
@@ -473,6 +493,8 @@ function render() {
   const q = document.getElementById('search').value.trim().toLowerCase();
   const minPA = Math.max(1, parseInt(document.getElementById('minPA').value, 10) || 1);
   const isTeam = groupBy.startsWith('team');
+  const paCount = isTeam ? PA_WINDOWS[paWindowKey].team : PA_WINDOWS[paWindowKey].player;
+  const playerPaCount = PA_WINDOWS[paWindowKey].player;
 
   const nameHeader = document.querySelector('#thead-row th[data-key="name"]');
   nameHeader.childNodes[0].textContent = isTeam ? 'Team ' : 'Player ';
@@ -482,12 +504,12 @@ function render() {
   const rows = [];
   const allTimestamps = [];
   for (const p of source) {
-    const { display, stats } = getEventsForPlayer(p);
+    const { display, stats } = getEventsForEntity(p, paCount);
     if (display.length === 0) continue;
     const s = computeStats(stats);
     if (s.pa < minPA) continue;
     if (q && !p.name.toLowerCase().includes(q)) continue;
-    rows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats });
+    rows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats, _paCount: paCount });
     for (const [d] of display) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
   }
 
@@ -518,17 +540,65 @@ function render() {
   const frag = document.createDocumentFragment();
   rows.forEach((r, i) => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="col-rank">${i + 1}</td>
-      <td class="col-name" title="${r.name}">${r.name}</td>
-      <td class="col-team">${isTeam ? '' : r.team}</td>
-      <td class="col-num">${r.wrc_plus}</td>
-      <td class="col-num">${r.pa}</td>
-      <td class="col-num">${r.hits}</td>
-      <td class="col-num">${r.walks}</td>
-      <td class="col-chart"><canvas></canvas></td>`;
-    frag.appendChild(tr);
-    canvasMap.set(tr.querySelector('canvas'), r);
+    if (isTeam) {
+      const expanded = expandedTeams.has(r.team);
+      tr.classList.add('team-row');
+      tr.innerHTML = `
+        <td class="col-rank">${i + 1}</td>
+        <td class="col-name" title="${r.name}"><span class="expand-arrow${expanded ? ' open' : ''}">▶</span> ${r.name}</td>
+        <td class="col-team"></td>
+        <td class="col-num">${r.wrc_plus}</td>
+        <td class="col-num">${r.pa}</td>
+        <td class="col-num">${r.hits}</td>
+        <td class="col-num">${r.walks}</td>
+        <td class="col-chart"><canvas></canvas></td>`;
+      tr.addEventListener('click', () => {
+        if (expandedTeams.has(r.team)) expandedTeams.delete(r.team);
+        else expandedTeams.add(r.team);
+        render();
+      });
+      frag.appendChild(tr);
+      canvasMap.set(tr.querySelector('canvas'), r);
+
+      if (expanded) {
+        const players = getPlayersForTeam(r.team);
+        const playerRows = [];
+        for (const p of players) {
+          const { display, stats } = getEventsForEntity(p, playerPaCount);
+          if (display.length === 0) continue;
+          const s = computeStats(stats);
+          playerRows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats, _paCount: playerPaCount });
+        }
+        playerRows.sort((a, b) => b.wrc_plus - a.wrc_plus);
+        for (const pr of playerRows) {
+          const subTr = document.createElement('tr');
+          subTr.classList.add('player-subrow');
+          subTr.innerHTML = `
+            <td class="col-rank"></td>
+            <td class="col-name" title="${pr.name}">${pr.name}</td>
+            <td class="col-team">${pr.team || ''}</td>
+            <td class="col-num">${pr.wrc_plus}</td>
+            <td class="col-num">${pr.pa}</td>
+            <td class="col-num">${pr.hits}</td>
+            <td class="col-num">${pr.walks}</td>
+            <td class="col-chart"><canvas></canvas></td>`;
+          frag.appendChild(subTr);
+          canvasMap.set(subTr.querySelector('canvas'), pr);
+        }
+      }
+    } else {
+      tr.innerHTML = `
+        <td class="col-rank">${i + 1}</td>
+        <td class="col-name" title="${r.name}">${r.name}</td>
+        <td class="col-team">${r.team}</td>
+        <td class="col-num">${r.wrc_plus}</td>
+        <td class="col-num">${r.pa}</td>
+        <td class="col-num">${r.hits}</td>
+        <td class="col-num">${r.walks}</td>
+        <td class="col-chart"><canvas></canvas></td>`;
+      frag.appendChild(tr);
+      canvasMap.set(tr.querySelector('canvas'), r);
+    }
   });
   tbody.appendChild(frag);
 
@@ -576,11 +646,11 @@ function drawAllCharts() {
     canvas.style.height = cssH + 'px';
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    drawScatter(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH);
+    drawScatter(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH, row._paCount);
   });
 }
 
-function drawScatter(ctx, canvas, displayEvents, statEvents, w, h) {
+function drawScatter(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
   const pad = { top: 4, right: 30, bottom: 12, left: 6 };
   const pw = w - pad.left - pad.right;
   const ph = h - pad.top - pad.bottom;
@@ -704,14 +774,14 @@ function drawScatter(ctx, canvas, displayEvents, statEvents, w, h) {
 
     // In rolling mode, evict oldest events beyond the window size
     if (useRolling) {
-      while (window.length > paWindow) {
+      while (window.length > paCount) {
         const old = window.shift();
         wobaNumer -= old.rv;
         if (old.inDenom) wobaDenom--;
       }
     }
 
-    const minPA = useRolling ? Math.min(paWindow, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA;
+    const minPA = useRolling ? Math.min(paCount, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA;
     if (window.length >= minPA && wobaDenom > 0) {
       const woba = wobaNumer / wobaDenom;
       const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
