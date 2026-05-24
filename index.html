@@ -163,6 +163,7 @@ let filtered = [];
 let dateMin, dateMax;
 const canvasMap = new Map();   // canvas element → player obj
 const pointsMap = new Map();   // canvas element → [{x,y,evt,date,rv}]
+const lineMap = new Map();     // canvas element → [{x,y,wrcPlus,paNum}]
 
 /* ================================================================
    BOOT
@@ -275,6 +276,7 @@ function render() {
   tbody.innerHTML = '';
   canvasMap.clear();
   pointsMap.clear();
+  lineMap.clear();
 
   const frag = document.createDocumentFragment();
   filtered.forEach((p, i) => {
@@ -445,7 +447,7 @@ function drawScatter(ctx, canvas, events, w, h) {
       const wraaPerPa = (woba - lgwOBA) / wOBAScale;
       const wrcPlus = ((wraaPerPa + lgRPA) / lgRPA) * 100;
       const t = new Date(dateStr + 'T12:00:00').getTime();
-      linePoints.push({ x: xScale(t), y: yScaleWrc(wrcPlus), wrcPlus });
+      linePoints.push({ x: xScale(t), y: yScaleWrc(wrcPlus), wrcPlus, paNum: paCount, date: dateStr });
     }
   }
 
@@ -463,6 +465,7 @@ function drawScatter(ctx, canvas, events, w, h) {
   }
 
   pointsMap.set(canvas, pts);
+  lineMap.set(canvas, linePoints);
 }
 
 /* ================================================================
@@ -487,26 +490,45 @@ document.addEventListener('mousemove', e => {
   if (!canvas || !pointsMap.has(canvas)) { tooltip.style.opacity = 0; return; }
 
   const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
   const mx = (e.clientX - rect.left);
   const my = (e.clientY - rect.top);
 
+  // Check scatter dots
   const pts = pointsMap.get(canvas);
   let best = null, bestDist = 12;
   for (const p of pts) {
-    // scale stored coords from CSS-pixel space
-    const cssX = p.x;
-    const cssY = p.y;
-    const d = Math.hypot(mx - cssX, my - cssY);
+    const d = Math.hypot(mx - p.x, my - p.y);
     if (d < bestDist) { bestDist = d; best = p; }
   }
 
-  if (!best) { tooltip.style.opacity = 0; return; }
-  tooltip.style.opacity = 1;
-  tooltip.style.left = (e.clientX + 14) + 'px';
-  tooltip.style.top  = (e.clientY - 10) + 'px';
-  tooltip.innerHTML = `<strong>${PRETTY[best.evt] || best.evt}</strong><br>` +
-    `${best.date} · Run value ${best.rv.toFixed(3)}`;
+  // Check wRC+ line points (x-proximity only — easier to hit a line)
+  const linePts = lineMap.get(canvas) || [];
+  let bestLine = null, bestLineDist = 8;
+  for (const lp of linePts) {
+    const dx = Math.abs(mx - lp.x);
+    const dy = Math.abs(my - lp.y);
+    if (dx < 6 && dy < 14) {
+      const d = Math.hypot(dx, dy * 0.4);
+      if (d < bestLineDist) { bestLineDist = d; bestLine = lp; }
+    }
+  }
+
+  // Prefer scatter dot if close, otherwise show wRC+ line
+  if (best && bestDist <= (bestLine ? bestLineDist : 12)) {
+    tooltip.style.opacity = 1;
+    tooltip.style.left = (e.clientX + 14) + 'px';
+    tooltip.style.top  = (e.clientY - 10) + 'px';
+    tooltip.innerHTML = `<strong>${PRETTY[best.evt] || best.evt}</strong><br>` +
+      `${best.date} · Run value ${best.rv.toFixed(3)}`;
+  } else if (bestLine) {
+    tooltip.style.opacity = 1;
+    tooltip.style.left = (e.clientX + 14) + 'px';
+    tooltip.style.top  = (e.clientY - 10) + 'px';
+    tooltip.innerHTML = `<strong>wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+      `${bestLine.date} · After ${bestLine.paNum} PA`;
+  } else {
+    tooltip.style.opacity = 0;
+  }
 });
 
 /* ── Resize handler ──────────────────────────────────────────── */
