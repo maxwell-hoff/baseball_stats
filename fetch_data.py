@@ -124,12 +124,14 @@ def build_player_json(all_pa: pd.DataFrame) -> list[dict]:
 
         p = players[bid]
         team = row.away_team if row.inning_topbot == "Top" else row.home_team
+        xw = row.estimated_woba_using_speedangle
         p["events"].append([
             row.game_date_str,
             row.events,
             round(row.run_value, 3),
             int(row.at_bat_number),
             team,
+            round(xw, 3) if pd.notna(xw) else None,
         ])
 
         if row.game_date_str >= p["_last_date"]:
@@ -198,18 +200,4 @@ def main():
         "last_updated": datetime.now().isoformat(timespec="seconds"),
         "years_available": years,
         "league_constants": league_constants,
-        "players": player_list,
-    }
-
-    os.makedirs("data", exist_ok=True)
-    path = os.path.join("data", "player_data.json")
-    with open(path, "w") as f:
-        json.dump(output, f)
-
-    size_mb = os.path.getsize(path) / (1024 * 1024)
-    print(f"\n  Wrote {path} ({size_mb:.1f} MB)")
-    print(f"  To view: python -m http.server 8000  →  http://localhost:8000\n")
-
-
-if __name__ == "__main__":
-    main()
+    
