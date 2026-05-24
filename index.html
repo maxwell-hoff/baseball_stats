@@ -569,8 +569,8 @@ function drawScatter(ctx, canvas, displayEvents, statEvents, w, h) {
   }
   ctx.globalAlpha = 1;
 
-  // ── Running wRC+ line (uses ALL display events for full progression) ──
-  const chronological = [...displayEvents].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
+  // ── Running wRC+ line (uses stat events so final value matches the table) ──
+  const chronological = [...statEvents].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
   let wobaNumer = 0, wobaDenom = 0, paCount = 0;
   const linePoints = [];
   for (const [dateStr, evt, rv] of chronological) {
