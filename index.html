@@ -221,6 +221,11 @@ let chartZoom = 1;               // 1x, 2x, 4x, 8x
 const ZOOM_STEPS = [1, 2, 4, 8];
 let groupBy = 'player';          // 'player' | 'team-asis' | 'team-aswas'
 
+const PA_OPTIONS = {
+  player: [{ value: 600, label: 'Last 600 PA' }, { value: 60, label: 'Last 60 PA' }],
+  team:   [{ value: 6000, label: 'Last 6,000 PA (~season)' }, { value: 1000, label: 'Last 1,000 PA (~month)' }],
+};
+
 // Current league constants (set from most recent selected year)
 let curLC = { lgwOBA: 0.313, wOBAScale: 1.232, lgRPA: 0.118 };
 
@@ -268,6 +273,13 @@ function syncLC() {
   if (DATA.league_constants[key]) {
     curLC = DATA.league_constants[key];
   }
+}
+
+function syncPaOptions() {
+  const opts = groupBy.startsWith('team') ? PA_OPTIONS.team : PA_OPTIONS.player;
+  const sel = document.getElementById('paWindow');
+  sel.innerHTML = opts.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
+  paWindow = opts[0].value;
 }
 
 /* ================================================================
@@ -320,6 +332,7 @@ function bindControls() {
     groupBy = e.target.value;
     document.getElementById('search').placeholder =
       groupBy.startsWith('team') ? 'Search team…' : 'Search player…';
+    syncPaOptions();
     render();
   });
 
