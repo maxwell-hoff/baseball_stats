@@ -524,7 +524,7 @@ function drawScatter(ctx, canvas, displayEvents, statEvents, w, h) {
   const pw = w - pad.left - pad.right;
   const ph = h - pad.top - pad.bottom;
 
-  const xScale = t => pad.left + compressedX.scale(t) * pw;
+  const xScale = t => pad.left + (1 - compressedX.scale(t)) * pw;
   const yScale = v => pad.top + ph - (v / Y_MAX) * ph;
   const yScaleWrc = v => {
     const clamped = Math.max(WRC_PLUS_MIN, Math.min(WRC_PLUS_MAX, v));
