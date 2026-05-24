@@ -33,6 +33,20 @@
   }
   .player-count{font-size:13px;color:#6b7280;margin-left:auto}
 
+  /* mode / year / PA selectors */
+  .mode-select,.pa-select{
+    padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;
+    font-size:13px;background:#fff;outline:none;cursor:pointer;
+  }
+  .year-btns{display:flex;gap:4px}
+  .year-btn{
+    padding:5px 10px;border:1px solid #d1d5db;border-radius:6px;
+    font-size:12px;font-weight:500;background:#fff;cursor:pointer;
+    transition:all .12s;user-select:none;
+  }
+  .year-btn.active{background:#6366f1;color:#fff;border-color:#6366f1}
+  .hidden{display:none !important}
+
   /* ── Legend ─────────────────────────────────────────────────── */
   .legend{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:18px;font-size:12px;color:#4b5563}
   .legend-item{display:flex;align-items:center;gap:4px}
@@ -71,7 +85,6 @@
     box-shadow:0 4px 12px rgba(0,0,0,.25);opacity:0;transition:opacity .1s;
   }
 
-  /* ── Loading / error states ──────────────────────────────── */
   .msg{text-align:center;padding:60px 20px;color:#6b7280;font-size:15px}
   .msg.error{color:#dc2626}
 </style>
@@ -89,6 +102,19 @@
 
 <div class="controls">
   <input class="search" id="search" type="text" placeholder="Search player…">
+
+  <select class="mode-select" id="mode">
+    <option value="season">By Season</option>
+    <option value="pa">By PAs</option>
+  </select>
+
+  <div class="year-btns" id="yearBtns"></div>
+
+  <select class="pa-select hidden" id="paWindow">
+    <option value="600">Last 600 PA</option>
+    <option value="60">Last 60 PA</option>
+  </select>
+
   <div class="min-pa-wrap">
     Min PA: <input class="min-pa" id="minPA" type="number" value="60" min="1" step="1">
   </div>
@@ -137,11 +163,11 @@ const WRC_PLUS_MAX = 250;
 const WRC_LINE_COLOR = '#6366f1';
 const WRC_LINE_MIN_PA = 10;
 
+const HIT_EVENTS = new Set(['single','double','triple','home_run']);
+const WALK_EVENTS = new Set(['walk','intent_walk']);
 const WOBA_DENOM_EXCLUDE = new Set([
-  'intent_walk', 'sac_bunt', 'sac_bunt_double_play', 'catcher_interf',
+  'intent_walk','sac_bunt','sac_bunt_double_play','catcher_interf',
 ]);
-
-let lgwOBA, wOBAScale, lgRPA;
 
 const LEGEND_ITEMS = [
   ['HR',  EVENT_COLORS.home_run],
@@ -159,11 +185,17 @@ const LEGEND_ITEMS = [
    ================================================================ */
 let DATA = null;
 let sort = { key: 'wrc_plus', dir: 'desc' };
-let filtered = [];
 let dateMin, dateMax;
-const canvasMap = new Map();   // canvas element → player obj
-const pointsMap = new Map();   // canvas element → [{x,y,evt,date,rv}]
-const lineMap = new Map();     // canvas element → [{x,y,wrcPlus,paNum}]
+const canvasMap = new Map();
+const pointsMap = new Map();
+const lineMap = new Map();
+
+let viewMode = 'season';        // 'season' | 'pa'
+let selectedYears = new Set();   // for season mode
+let paWindow = 600;              // for PA mode
+
+// Current league constants (set from most recent selected year)
+let curLC = { lgwOBA: 0.313, wOBAScale: 1.232, lgRPA: 0.118 };
 
 /* ================================================================
    BOOT
@@ -182,31 +214,59 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
-  document.getElementById('season').textContent = DATA.season + ' Season';
+  const years = DATA.years_available;
+  document.getElementById('season').textContent = years.join(', ') + ' Season' + (years.length > 1 ? 's' : '');
   document.getElementById('updated').textContent =
     'Updated ' + new Date(DATA.last_updated).toLocaleString();
-  document.getElementById('wt-year').textContent = DATA.weights_source_year;
+  document.getElementById('wt-year').textContent = years[years.length - 1];
 
-  lgwOBA = DATA.league_constants.lgwOBA;
-  wOBAScale = DATA.league_constants.wOBAScale;
-  lgRPA = DATA.league_constants.lgRPA;
-
-  computeDateExtent();
+  // Default: most recent year selected
+  selectedYears = new Set([years[years.length - 1]]);
+  buildYearButtons(years);
+  syncLC();
   bindControls();
   render();
 });
 
-function computeDateExtent() {
-  let lo = Infinity, hi = -Infinity;
-  for (const p of DATA.players) {
-    for (const [d] of p.events) {
-      const t = new Date(d + 'T12:00:00').getTime();
-      if (t < lo) lo = t;
-      if (t > hi) hi = t;
-    }
+function syncLC() {
+  // Use league constants from most recent selected year (or most recent available)
+  const years = DATA.years_available;
+  let best;
+  if (viewMode === 'season') {
+    best = Math.max(...selectedYears);
+  } else {
+    best = years[years.length - 1];
   }
-  dateMin = lo;
-  dateMax = hi;
+  const key = String(best);
+  if (DATA.league_constants[key]) {
+    curLC = DATA.league_constants[key];
+  }
+}
+
+/* ================================================================
+   YEAR BUTTONS
+   ================================================================ */
+function buildYearButtons(years) {
+  const wrap = document.getElementById('yearBtns');
+  wrap.innerHTML = '';
+  for (const y of years) {
+    const btn = document.createElement('button');
+    btn.className = 'year-btn' + (selectedYears.has(y) ? ' active' : '');
+    btn.dataset.year = y;
+    btn.textContent = y;
+    btn.addEventListener('click', () => {
+      if (selectedYears.has(y) && selectedYears.size > 1) {
+        selectedYears.delete(y);
+        btn.classList.remove('active');
+      } else {
+        selectedYears.add(y);
+        btn.classList.add('active');
+      }
+      syncLC();
+      render();
+    });
+    wrap.appendChild(btn);
+  }
 }
 
 /* ================================================================
@@ -223,11 +283,24 @@ function buildLegend() {
 }
 
 /* ================================================================
-   CONTROLS — search, min PA, column sort
+   CONTROLS
    ================================================================ */
 function bindControls() {
   document.getElementById('search').addEventListener('input', render);
   document.getElementById('minPA').addEventListener('input', render);
+
+  document.getElementById('mode').addEventListener('change', e => {
+    viewMode = e.target.value;
+    document.getElementById('yearBtns').classList.toggle('hidden', viewMode !== 'season');
+    document.getElementById('paWindow').classList.toggle('hidden', viewMode !== 'pa');
+    syncLC();
+    render();
+  });
+
+  document.getElementById('paWindow').addEventListener('change', e => {
+    paWindow = parseInt(e.target.value, 10);
+    render();
+  });
 
   document.querySelectorAll('#thead-row th[data-key]').forEach(th => {
     th.addEventListener('click', () => {
@@ -244,33 +317,76 @@ function bindControls() {
 }
 
 /* ================================================================
+   EVENT FILTERING & STAT COMPUTATION
+   ================================================================ */
+function getSelectedEvents(player) {
+  if (viewMode === 'season') {
+    return player.events.filter(e => selectedYears.has(parseInt(e[0].substring(0, 4))));
+  }
+  // "By PAs" — last N events across all years
+  return player.events.slice(-paWindow);
+}
+
+function computeStats(events) {
+  let pa = 0, hits = 0, walks = 0, wobaN = 0, wobaD = 0;
+  for (const [, evt, rv] of events) {
+    pa++;
+    if (HIT_EVENTS.has(evt)) hits++;
+    if (WALK_EVENTS.has(evt)) walks++;
+    wobaN += rv;
+    if (!WOBA_DENOM_EXCLUDE.has(evt)) wobaD++;
+  }
+  const woba = wobaD > 0 ? wobaN / wobaD : 0;
+  const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
+  const wrc_plus = Math.round(((wraaPerPa + curLC.lgRPA) / curLC.lgRPA) * 100);
+  return { pa, hits, walks, woba, wrc_plus };
+}
+
+/* ================================================================
    RENDER
    ================================================================ */
 function render() {
   const q = document.getElementById('search').value.trim().toLowerCase();
   const minPA = Math.max(1, parseInt(document.getElementById('minPA').value, 10) || 1);
 
-  filtered = DATA.players.filter(p => {
-    if (p.pa < minPA) return false;
-    if (q && !p.name.toLowerCase().includes(q)) return false;
-    return true;
-  });
+  // Compute stats for every player, attach selected events
+  const rows = [];
+  for (const p of DATA.players) {
+    const evts = getSelectedEvents(p);
+    if (evts.length === 0) continue;
+    const s = computeStats(evts);
+    if (s.pa < minPA) continue;
+    if (q && !p.name.toLowerCase().includes(q)) continue;
+    rows.push({ ...p, ...s, _evts: evts });
+  }
 
   const dir = sort.dir === 'desc' ? -1 : 1;
   if (sort.key === 'name') {
-    filtered.sort((a, b) => dir * a.name.localeCompare(b.name));
+    rows.sort((a, b) => dir * a.name.localeCompare(b.name));
   } else {
-    filtered.sort((a, b) => dir * (a[sort.key] - b[sort.key]));
+    rows.sort((a, b) => dir * (a[sort.key] - b[sort.key]));
   }
 
-  // update header arrows
+  // Global date extent for selected events
+  let lo = Infinity, hi = -Infinity;
+  for (const r of rows) {
+    for (const [d] of r._evts) {
+      const t = new Date(d + 'T12:00:00').getTime();
+      if (t < lo) lo = t;
+      if (t > hi) hi = t;
+    }
+  }
+  dateMin = lo;
+  dateMax = hi;
+
+  // Update header arrows
   document.querySelectorAll('#thead-row th[data-key]').forEach(th => {
     const active = th.dataset.key === sort.key;
     th.classList.toggle('active', active);
     th.querySelector('.arrow').textContent = active ? (sort.dir === 'desc' ? '▼' : '▲') : '';
   });
 
-  document.getElementById('count').textContent = `${filtered.length} players`;
+  document.getElementById('count').textContent = `${rows.length} players`;
 
   const tbody = document.getElementById('tbody');
   tbody.innerHTML = '';
@@ -279,19 +395,19 @@ function render() {
   lineMap.clear();
 
   const frag = document.createDocumentFragment();
-  filtered.forEach((p, i) => {
+  rows.forEach((r, i) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td class="col-rank">${i + 1}</td>
-      <td class="col-name" title="${p.name}">${p.name}</td>
-      <td class="col-team">${p.team}</td>
-      <td class="col-num">${Math.round(p.wrc_plus)}</td>
-      <td class="col-num">${p.pa}</td>
-      <td class="col-num">${p.hits}</td>
-      <td class="col-num">${p.walks}</td>
+      <td class="col-name" title="${r.name}">${r.name}</td>
+      <td class="col-team">${r.team}</td>
+      <td class="col-num">${r.wrc_plus}</td>
+      <td class="col-num">${r.pa}</td>
+      <td class="col-num">${r.hits}</td>
+      <td class="col-num">${r.walks}</td>
       <td class="col-chart"><canvas></canvas></td>`;
     frag.appendChild(tr);
-    canvasMap.set(tr.querySelector('canvas'), p);
+    canvasMap.set(tr.querySelector('canvas'), r);
   });
   tbody.appendChild(frag);
 
@@ -302,19 +418,18 @@ function render() {
    CANVAS SCATTER CHARTS
    ================================================================ */
 function drawAllCharts() {
-  canvasMap.forEach((player, canvas) => {
+  canvasMap.forEach((row, canvas) => {
     const td = canvas.parentElement;
-    const cssW = td.clientWidth - 20;   // padding offset
+    const cssW = td.clientWidth - 20;
     const cssH = 56;
     const dpr = window.devicePixelRatio || 1;
     canvas.width  = cssW * dpr;
     canvas.height = cssH * dpr;
     canvas.style.width  = cssW + 'px';
     canvas.style.height = cssH + 'px';
-
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    drawScatter(ctx, canvas, player.events, cssW, cssH);
+    drawScatter(ctx, canvas, row._evts, cssW, cssH);
   });
 }
 
@@ -324,81 +439,65 @@ function drawScatter(ctx, canvas, events, w, h) {
   const ph = h - pad.top - pad.bottom;
 
   const MS_PER_DAY = 86400000;
-  const dayWidthPx = (MS_PER_DAY / (dateMax - dateMin)) * pw;
+  const dayWidthPx = (MS_PER_DAY / (dateMax - dateMin || 1)) * pw;
 
-  const xScale = d => pad.left + ((d - dateMin) / (dateMax - dateMin)) * pw;
+  const xScale = d => pad.left + ((d - dateMin) / (dateMax - dateMin || 1)) * pw;
   const yScale = v => pad.top + ph - (v / Y_MAX) * ph;
   const yScaleWrc = v => {
     const clamped = Math.max(WRC_PLUS_MIN, Math.min(WRC_PLUS_MAX, v));
     return pad.top + ph - ((clamped - WRC_PLUS_MIN) / (WRC_PLUS_MAX - WRC_PLUS_MIN)) * ph;
   };
 
-  // gridlines at y = 1, 2 (left axis)
+  // gridlines
   ctx.strokeStyle = '#f0f0f0';
   ctx.lineWidth = 0.5;
   for (const g of [1, 2]) {
     const gy = yScale(g);
-    ctx.beginPath();
-    ctx.moveTo(pad.left, gy);
-    ctx.lineTo(w - pad.right, gy);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad.left, gy); ctx.lineTo(w - pad.right, gy); ctx.stroke();
   }
 
-  // wRC+ = 100 reference line (dashed)
+  // wRC+ = 100 reference
   ctx.strokeStyle = '#c7c7cc';
   ctx.lineWidth = 0.5;
   ctx.setLineDash([3, 3]);
   const y100 = yScaleWrc(100);
-  ctx.beginPath();
-  ctx.moveTo(pad.left, y100);
-  ctx.lineTo(w - pad.right, y100);
-  ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pad.left, y100); ctx.lineTo(w - pad.right, y100); ctx.stroke();
   ctx.setLineDash([]);
-
-  // right-axis label: "100"
-  ctx.fillStyle = '#9ca3af';
-  ctx.font = '8px sans-serif';
-  ctx.textAlign = 'left';
+  ctx.fillStyle = '#9ca3af'; ctx.font = '8px sans-serif'; ctx.textAlign = 'left';
   ctx.fillText('100', w - pad.right + 3, y100 + 3);
 
   // baseline
-  ctx.strokeStyle = '#e5e7eb';
-  ctx.lineWidth = 0.7;
+  ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 0.7;
   const baseY = yScale(0);
-  ctx.beginPath();
-  ctx.moveTo(pad.left, baseY);
-  ctx.lineTo(w - pad.right, baseY);
-  ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pad.left, baseY); ctx.lineTo(w - pad.right, baseY); ctx.stroke();
 
-  // month labels along x
-  ctx.fillStyle = '#b0b0b0';
-  ctx.font = '9px sans-serif';
-  ctx.textAlign = 'center';
+  // month/year labels
+  ctx.fillStyle = '#b0b0b0'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const startMonth = new Date(dateMin).getMonth();
-  const endMonth = new Date(dateMax).getMonth();
-  for (let m = startMonth; m <= endMonth; m++) {
-    const yr = new Date(dateMin).getFullYear();
-    const t = new Date(yr, m, 15).getTime();
+  const dStart = new Date(dateMin), dEnd = new Date(dateMax);
+  let cur = new Date(dStart.getFullYear(), dStart.getMonth(), 15);
+  while (cur <= dEnd) {
+    const t = cur.getTime();
     if (t >= dateMin && t <= dateMax) {
-      ctx.fillText(months[m], xScale(t), h - 1);
+      const label = (dEnd.getFullYear() - dStart.getFullYear() >= 1)
+        ? months[cur.getMonth()] + ' ' + String(cur.getFullYear()).slice(2)
+        : months[cur.getMonth()];
+      ctx.fillText(label, xScale(t), h - 1);
     }
+    cur.setMonth(cur.getMonth() + 1);
   }
 
-  // Pre-compute intra-day x-offsets so PAs on the same date spread out.
+  // Group by date for intra-day spread
   const byDate = new Map();
   for (const e of events) {
     const d = e[0];
     if (!byDate.has(d)) byDate.set(d, []);
     byDate.get(d).push(e);
   }
-  for (const group of byDate.values()) {
-    group.sort((a, b) => a[3] - b[3]);
-  }
+  for (const group of byDate.values()) group.sort((a, b) => a[3] - b[3]);
 
-  // Build draw list: outs first (behind), then positive events on top
   const drawList = [];
-  for (const [dateStr, group] of byDate) {
+  for (const [, group] of byDate) {
     const n = group.length;
     const spread = Math.min(dayWidthPx * 0.8, n * 3);
     group.forEach((e, i) => {
@@ -414,49 +513,35 @@ function drawScatter(ctx, canvas, events, w, h) {
     const t = new Date(dateStr + 'T12:00:00').getTime();
     const x = xScale(t) + xOff;
     const y = yScale(rv);
-    const isOut = !(evt in EVENT_COLORS);
+    const isOut = !EVENT_COLORS[evt];
     const color = EVENT_COLORS[evt] || OUT_COLOR;
-    const r = 1.5;
-    const alpha = isOut ? 0.45 : 0.8;
-
-    ctx.globalAlpha = alpha;
+    ctx.globalAlpha = isOut ? 0.45 : 0.8;
     ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-
-    pts.push({ x, y, r: Math.max(r, 5), evt, date: dateStr, rv });
+    ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI * 2); ctx.fill();
+    pts.push({ x, y, r: 5, evt, date: dateStr, rv });
   }
   ctx.globalAlpha = 1;
 
-  // ── Running wRC+ line (right y-axis) ──────────────────────────
-  // Events are already sorted chronologically. Walk through them in
-  // order, accumulate wOBA numerator/denominator, compute wRC+ after
-  // each PA, and plot once we hit WRC_LINE_MIN_PA.
+  // ── Running wRC+ line ──────────────────────────────────────
   const chronological = [...events].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
   let wobaNumer = 0, wobaDenom = 0, paCount = 0;
   const linePoints = [];
-
   for (const [dateStr, evt, rv] of chronological) {
     wobaNumer += rv;
     if (!WOBA_DENOM_EXCLUDE.has(evt)) wobaDenom++;
     paCount++;
-
     if (paCount >= WRC_LINE_MIN_PA && wobaDenom > 0) {
       const woba = wobaNumer / wobaDenom;
-      const wraaPerPa = (woba - lgwOBA) / wOBAScale;
-      const wrcPlus = ((wraaPerPa + lgRPA) / lgRPA) * 100;
+      const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
+      const wrcPlus = ((wraaPerPa + curLC.lgRPA) / curLC.lgRPA) * 100;
       const t = new Date(dateStr + 'T12:00:00').getTime();
       linePoints.push({ x: xScale(t), y: yScaleWrc(wrcPlus), wrcPlus, paNum: paCount, date: dateStr });
     }
   }
-
   if (linePoints.length > 1) {
     ctx.beginPath();
     ctx.moveTo(linePoints[0].x, linePoints[0].y);
-    for (let i = 1; i < linePoints.length; i++) {
-      ctx.lineTo(linePoints[i].x, linePoints[i].y);
-    }
+    for (let i = 1; i < linePoints.length; i++) ctx.lineTo(linePoints[i].x, linePoints[i].y);
     ctx.strokeStyle = WRC_LINE_COLOR;
     ctx.lineWidth = 1.5;
     ctx.globalAlpha = 0.7;
@@ -490,10 +575,9 @@ document.addEventListener('mousemove', e => {
   if (!canvas || !pointsMap.has(canvas)) { tooltip.style.opacity = 0; return; }
 
   const rect = canvas.getBoundingClientRect();
-  const mx = (e.clientX - rect.left);
-  const my = (e.clientY - rect.top);
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
 
-  // Check scatter dots
   const pts = pointsMap.get(canvas);
   let best = null, bestDist = 12;
   for (const p of pts) {
@@ -501,7 +585,6 @@ document.addEventListener('mousemove', e => {
     if (d < bestDist) { bestDist = d; best = p; }
   }
 
-  // Check wRC+ line points (x-proximity only — easier to hit a line)
   const linePts = lineMap.get(canvas) || [];
   let bestLine = null, bestLineDist = 8;
   for (const lp of linePts) {
@@ -513,7 +596,6 @@ document.addEventListener('mousemove', e => {
     }
   }
 
-  // Prefer scatter dot if close, otherwise show wRC+ line
   if (best && bestDist <= (bestLine ? bestLineDist : 12)) {
     tooltip.style.opacity = 1;
     tooltip.style.left = (e.clientX + 14) + 'px';

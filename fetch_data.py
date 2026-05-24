@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Fetch Statcast plate appearance data and produce JSON for the visualization.
+Fetch multi-year Statcast plate appearance data and produce JSON for the
+visualization.
 
 Usage:
-    python fetch_data.py              # fetch current season
-    python fetch_data.py --year 2025  # fetch a specific season
+    python fetch_data.py                  # current year + 2 prior
+    python fetch_data.py --years 2025     # single year
+    python fetch_data.py --years 2024,2025,2026
 
 After running, start a local server to view:
     python -m http.server 8000
@@ -21,10 +23,14 @@ import pandas as pd
 import pybaseball
 
 
-# ── wOBA linear weights (FanGraphs Guts!) ────────────────────────────
-# These represent the run-value contribution of each batting event.
-# Updated yearly — swap in new values from https://www.fangraphs.com/tools/guts
+# ── wOBA linear weights + league constants (FanGraphs Guts!) ─────────
+# Updated yearly — https://www.fangraphs.com/tools/guts
 WEIGHTS_BY_YEAR = {
+    2023: {
+        "wBB": 0.696, "wHBP": 0.726, "w1B": 0.883,
+        "w2B": 1.244, "w3B": 1.569, "wHR": 2.015,
+        "lgwOBA": 0.318, "wOBAScale": 1.204, "lgRPA": 0.119,
+    },
     2024: {
         "wBB": 0.689, "wHBP": 0.720, "w1B": 0.882,
         "w2B": 1.254, "w3B": 1.590, "wHR": 2.050,
@@ -37,7 +43,6 @@ WEIGHTS_BY_YEAR = {
     },
 }
 
-# Statcast event → linear-weight mapping key
 EVENT_WEIGHT_KEY = {
     "single":       "w1B",
     "double":       "w2B",
@@ -48,14 +53,6 @@ EVENT_WEIGHT_KEY = {
     "hit_by_pitch": "wHBP",
 }
 
-HIT_EVENTS = {"single", "double", "triple", "home_run"}
-WALK_EVENTS = {"walk", "intent_walk"}
-
-# Events excluded from the wOBA denominator (AB + BB - IBB + SF + HBP)
-WOBA_DENOM_EXCLUDE = {"intent_walk", "sac_bunt", "sac_bunt_double_play", "catcher_interf"}
-
-# Events that end a plate appearance (excludes baserunning events like
-# caught_stealing, pickoff, etc. that also appear in the events column)
 PA_EVENTS = {
     "single", "double", "triple", "home_run",
     "walk", "intent_walk", "hit_by_pitch",
@@ -70,11 +67,10 @@ PA_EVENTS = {
 
 
 def get_weights(year: int) -> dict:
-    """Return the weight dict for *year*, falling back to the most recent."""
     if year in WEIGHTS_BY_YEAR:
         return WEIGHTS_BY_YEAR[year]
     fallback = max(WEIGHTS_BY_YEAR.keys())
-    print(f"  No weights for {year}; using {fallback} weights as proxy.")
+    print(f"    No weights for {year}; using {fallback} as proxy.")
     return WEIGHTS_BY_YEAR[fallback]
 
 
@@ -83,35 +79,29 @@ def run_value(event: str, weights: dict) -> float:
     return weights[key] if key else 0.0
 
 
-def fetch_statcast(year: int) -> pd.DataFrame:
-    """Download Statcast data for the given season."""
+def fetch_season(year: int) -> pd.DataFrame:
+    """Fetch one season of Statcast data, regular-season games only."""
     pybaseball.cache.enable()
-
-    start = f"{year}-03-20"
+    start = f"{year}-03-15"
     end = min(date.today(), date(year, 11, 15)).strftime("%Y-%m-%d")
 
-    print(f"  Fetching Statcast data  {start} → {end} …")
-    print("  (this can take a few minutes on the first run; results are cached)")
+    print(f"  {year}: fetching {start} → {end} …")
     df = pybaseball.statcast(start_dt=start, end_dt=end)
-    print(f"  Received {len(df):,} pitch records.")
+    if df.empty:
+        return df
+
+    before = len(df)
+    if "game_type" in df.columns:
+        df = df[df["game_type"] == "R"]
+    excluded = before - len(df)
+    if excluded:
+        print(f"    Excluded {excluded:,} spring-training / exhibition rows")
+    print(f"    {len(df):,} regular-season pitch records")
     return df
 
 
-def build_player_json(df: pd.DataFrame, weights: dict) -> list[dict]:
-    """Aggregate per-player stats and individual PA event lists."""
-    pa = df[df["events"].isin(PA_EVENTS)].copy()
-    pa["run_value"] = pa["events"].apply(lambda e: run_value(e, weights))
-    pa["game_date_str"] = pd.to_datetime(pa["game_date"]).dt.strftime("%Y-%m-%d")
-
-    # Determine each batter's team from the most-recent game
-    pa["batting_team"] = pa.apply(
-        lambda r: r["away_team"] if r["inning_topbot"] == "Top" else r["home_team"],
-        axis=1,
-    )
-
-    # player_name column is the *pitcher*, not the batter.
-    # Look up batter names from their MLBAM IDs.
-    batter_ids = pa["batter"].unique().tolist()
+def build_player_json(all_pa: pd.DataFrame) -> list[dict]:
+    batter_ids = all_pa["batter"].unique().tolist()
     print(f"  Looking up names for {len(batter_ids):,} unique batters …")
     name_df = pybaseball.playerid_reverse_lookup(batter_ids, key_type="mlbam")
     batter_names: dict[int, str] = {}
@@ -121,33 +111,18 @@ def build_player_json(df: pd.DataFrame, weights: dict) -> list[dict]:
         batter_names[int(row["key_mlbam"])] = f"{first} {last}"
 
     players: dict[int, dict] = {}
-    for row in pa.itertuples(index=False):
+    for row in all_pa.itertuples(index=False):
         bid = int(row.batter)
         if bid not in players:
             players[bid] = {
                 "name": batter_names.get(bid, f"Unknown ({bid})"),
                 "team": "",
-                "pa": 0,
-                "hits": 0,
-                "walks": 0,
                 "events": [],
                 "_last_date": "",
                 "_team_for_last": "",
-                "_woba_numer": 0.0,
-                "_woba_denom": 0,
             }
 
         p = players[bid]
-        p["pa"] += 1
-        if row.events in HIT_EVENTS:
-            p["hits"] += 1
-        if row.events in WALK_EVENTS:
-            p["walks"] += 1
-
-        p["_woba_numer"] += row.run_value
-        if row.events not in WOBA_DENOM_EXCLUDE:
-            p["_woba_denom"] += 1
-
         p["events"].append([
             row.game_date_str,
             row.events,
@@ -155,78 +130,72 @@ def build_player_json(df: pd.DataFrame, weights: dict) -> list[dict]:
             int(row.at_bat_number),
         ])
 
+        team = row.away_team if row.inning_topbot == "Top" else row.home_team
         if row.game_date_str >= p["_last_date"]:
             p["_last_date"] = row.game_date_str
-            p["_team_for_last"] = row.batting_team
-
-    lg_woba = weights["lgwOBA"]
-    woba_scale = weights["wOBAScale"]
-    lg_rpa = weights["lgRPA"]
+            p["_team_for_last"] = team
 
     for p in players.values():
         p["team"] = p.pop("_team_for_last", "")
         p.pop("_last_date", None)
-
-        denom = p.pop("_woba_denom")
-        numer = p.pop("_woba_numer")
-        woba = numer / denom if denom > 0 else 0.0
-        p["woba"] = round(woba, 3)
-        # wRC+ ≈ ( wRAA/PA + lgR/PA ) / lgR/PA * 100
-        # Simplified form without park factor:
-        # wRC+ = ((wOBA - lgwOBA) / wOBAScale + lgR/PA) / lgR/PA * 100
-        wraa_per_pa = (woba - lg_woba) / woba_scale
-        wrc_plus = ((wraa_per_pa + lg_rpa) / lg_rpa) * 100
-        p["wrc_plus"] = round(wrc_plus, 0)
-
         p["events"].sort(key=lambda e: (e[0], e[3]))
 
-    return sorted(players.values(), key=lambda p: p["hits"], reverse=True)
+    return list(players.values())
 
 
 def main():
     parser = argparse.ArgumentParser(description="Fetch MLB PA data → JSON")
-    parser.add_argument("--year", type=int, default=date.today().year,
-                        help="Season year (default: current year)")
+    parser.add_argument(
+        "--years",
+        help="Comma-separated years to fetch (default: current + 2 prior)",
+    )
     args = parser.parse_args()
-    year = args.year
+
+    if args.years:
+        years = sorted(int(y) for y in args.years.split(","))
+    else:
+        current = date.today().year
+        years = [current - 2, current - 1, current]
 
     print(f"\n{'='*60}")
-    print(f"  MLB Plate Appearance Fetcher — {year} season")
+    print(f"  MLB Plate Appearance Fetcher — {', '.join(map(str, years))}")
     print(f"{'='*60}\n")
 
-    weights = get_weights(year)
-    weights_year = year if year in WEIGHTS_BY_YEAR else max(WEIGHTS_BY_YEAR.keys())
+    pa_frames: list[pd.DataFrame] = []
+    for year in years:
+        weights = get_weights(year)
+        df = fetch_season(year)
+        if df.empty:
+            print(f"    No data for {year}, skipping.")
+            continue
+        pa = df[df["events"].isin(PA_EVENTS)].copy()
+        pa["run_value"] = pa["events"].apply(lambda e: run_value(e, weights))
+        pa["game_date_str"] = pd.to_datetime(pa["game_date"]).dt.strftime("%Y-%m-%d")
+        pa_frames.append(pa)
+        print(f"    {len(pa):,} plate appearances")
 
-    df = fetch_statcast(year)
-    if df.empty:
-        print("  No data returned. Is the season underway?")
+    if not pa_frames:
+        print("  No data returned for any year. Exiting.")
         sys.exit(1)
 
-    print("  Processing plate appearances …")
-    player_list = build_player_json(df, weights)
-    print(f"  Found {len(player_list):,} players with at least 1 PA.")
+    all_pa = pd.concat(pa_frames, ignore_index=True)
+    print(f"\n  Total: {len(all_pa):,} plate appearances across {len(pa_frames)} season(s)")
 
-    readable_weights = {
-        "out": 0.0,
-        "walk": weights["wBB"],
-        "hit_by_pitch": weights["wHBP"],
-        "single": weights["w1B"],
-        "double": weights["w2B"],
-        "triple": weights["w3B"],
-        "home_run": weights["wHR"],
-    }
+    player_list = build_player_json(all_pa)
+    print(f"  {len(player_list):,} unique players")
 
-    league_constants = {
-        "lgwOBA": weights["lgwOBA"],
-        "wOBAScale": weights["wOBAScale"],
-        "lgRPA": weights["lgRPA"],
-    }
+    league_constants: dict[str, dict] = {}
+    for year in years:
+        w = get_weights(year)
+        league_constants[str(year)] = {
+            "lgwOBA": w["lgwOBA"],
+            "wOBAScale": w["wOBAScale"],
+            "lgRPA": w["lgRPA"],
+        }
 
     output = {
         "last_updated": datetime.now().isoformat(timespec="seconds"),
-        "season": year,
-        "weights_source_year": weights_year,
-        "linear_weights": readable_weights,
+        "years_available": years,
         "league_constants": league_constants,
         "players": player_list,
     }
