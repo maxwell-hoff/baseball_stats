@@ -87,7 +87,7 @@
   .col-team{width:52px;font-size:12px;color:#6b7280;text-align:center}
   .col-num{width:62px;text-align:right;font-variant-numeric:tabular-nums}
   .col-chart{min-width:500px;padding:4px 10px !important}
-  .col-chart canvas{display:block;width:100%;height:56px}
+  .col-chart canvas{display:block;width:100%;height:90px}
 
   /* ── Team expand/collapse ────────────────────────────────────── */
   .team-row{cursor:pointer}
@@ -638,7 +638,7 @@ function drawAllCharts() {
   canvasMap.forEach((row, canvas) => {
     const td = canvas.parentElement;
     const cssW = td.clientWidth - 20;
-    const cssH = 56;
+    const cssH = 90;
     const dpr = window.devicePixelRatio || 1;
     canvas.width  = cssW * dpr;
     canvas.height = cssH * dpr;
