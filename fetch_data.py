@@ -123,14 +123,15 @@ def build_player_json(all_pa: pd.DataFrame) -> list[dict]:
             }
 
         p = players[bid]
+        team = row.away_team if row.inning_topbot == "Top" else row.home_team
         p["events"].append([
             row.game_date_str,
             row.events,
             round(row.run_value, 3),
             int(row.at_bat_number),
+            team,
         ])
 
-        team = row.away_team if row.inning_topbot == "Top" else row.home_team
         if row.game_date_str >= p["_last_date"]:
             p["_last_date"] = row.game_date_str
             p["_team_for_last"] = team

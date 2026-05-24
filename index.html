@@ -127,6 +127,12 @@
     <option value="60">Last 60 PA</option>
   </select>
 
+  <select class="mode-select" id="groupBy">
+    <option value="player">By Player</option>
+    <option value="team-asis">By Team – As-is</option>
+    <option value="team-aswas">By Team – As-was</option>
+  </select>
+
   <div class="min-pa-wrap">
     Min PA: <input class="min-pa" id="minPA" type="number" value="60" min="1" step="1">
   </div>
@@ -213,6 +219,7 @@ let selectedYears = new Set();   // for season mode
 let paWindow = 600;              // for PA mode
 let chartZoom = 1;               // 1x, 2x, 4x, 8x
 const ZOOM_STEPS = [1, 2, 4, 8];
+let groupBy = 'player';          // 'player' | 'team-asis' | 'team-aswas'
 
 // Current league constants (set from most recent selected year)
 let curLC = { lgwOBA: 0.313, wOBAScale: 1.232, lgRPA: 0.118 };
@@ -309,6 +316,13 @@ function bindControls() {
   document.getElementById('search').addEventListener('input', render);
   document.getElementById('minPA').addEventListener('input', render);
 
+  document.getElementById('groupBy').addEventListener('change', e => {
+    groupBy = e.target.value;
+    document.getElementById('search').placeholder =
+      groupBy.startsWith('team') ? 'Search team…' : 'Search player…';
+    render();
+  });
+
   document.getElementById('mode').addEventListener('change', e => {
     viewMode = e.target.value;
     document.getElementById('yearBtns').classList.toggle('hidden', viewMode !== 'season');
@@ -353,8 +367,36 @@ function getEventsForPlayer(player) {
     const evts = player.events.filter(e => selectedYears.has(parseInt(e[0].substring(0, 4))));
     return { display: evts, stats: evts };
   }
-  // "By PAs": chart shows ALL events, stats use last N
   return { display: player.events, stats: player.events.slice(-paWindow) };
+}
+
+function buildTeamRows(mode) {
+  const teams = new Map();
+
+  if (mode === 'team-asis') {
+    for (const p of DATA.players) {
+      const abbr = p.team;
+      if (!abbr) continue;
+      if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [] });
+      const t = teams.get(abbr);
+      for (const e of p.events) t.events.push(e);
+    }
+  } else {
+    for (const p of DATA.players) {
+      for (const e of p.events) {
+        const abbr = e[4];
+        if (!abbr) continue;
+        if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [] });
+        teams.get(abbr).events.push(e);
+      }
+    }
+  }
+
+  for (const t of teams.values()) {
+    t.events.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
+  }
+
+  return [...teams.values()];
 }
 
 function computeStats(events) {
@@ -417,10 +459,16 @@ function buildCompressedScale(allTimestamps) {
 function render() {
   const q = document.getElementById('search').value.trim().toLowerCase();
   const minPA = Math.max(1, parseInt(document.getElementById('minPA').value, 10) || 1);
+  const isTeam = groupBy.startsWith('team');
+
+  const nameHeader = document.querySelector('#thead-row th[data-key="name"]');
+  nameHeader.childNodes[0].textContent = isTeam ? 'Team ' : 'Player ';
+
+  const source = isTeam ? buildTeamRows(groupBy) : DATA.players;
 
   const rows = [];
   const allTimestamps = [];
-  for (const p of DATA.players) {
+  for (const p of source) {
     const { display, stats } = getEventsForPlayer(p);
     if (display.length === 0) continue;
     const s = computeStats(stats);
@@ -439,14 +487,14 @@ function render() {
     rows.sort((a, b) => dir * (a[sort.key] - b[sort.key]));
   }
 
-  // Update header arrows
   document.querySelectorAll('#thead-row th[data-key]').forEach(th => {
     const active = th.dataset.key === sort.key;
     th.classList.toggle('active', active);
     th.querySelector('.arrow').textContent = active ? (sort.dir === 'desc' ? '▼' : '▲') : '';
   });
 
-  document.getElementById('count').textContent = `${rows.length} players`;
+  const entityLabel = isTeam ? 'teams' : 'players';
+  document.getElementById('count').textContent = `${rows.length} ${entityLabel}`;
 
   const tbody = document.getElementById('tbody');
   tbody.innerHTML = '';
@@ -460,7 +508,7 @@ function render() {
     tr.innerHTML = `
       <td class="col-rank">${i + 1}</td>
       <td class="col-name" title="${r.name}">${r.name}</td>
-      <td class="col-team">${r.team}</td>
+      <td class="col-team">${isTeam ? '' : r.team}</td>
       <td class="col-num">${r.wrc_plus}</td>
       <td class="col-num">${r.pa}</td>
       <td class="col-num">${r.hits}</td>
