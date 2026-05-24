@@ -185,7 +185,7 @@ const LEGEND_ITEMS = [
    ================================================================ */
 let DATA = null;
 let sort = { key: 'wrc_plus', dir: 'desc' };
-let dateMin, dateMax;
+let compressedX = null; // compressed x-scale function (skips offseason)
 const canvasMap = new Map();
 const pointsMap = new Map();
 const lineMap = new Map();
@@ -319,12 +319,13 @@ function bindControls() {
 /* ================================================================
    EVENT FILTERING & STAT COMPUTATION
    ================================================================ */
-function getSelectedEvents(player) {
+function getEventsForPlayer(player) {
   if (viewMode === 'season') {
-    return player.events.filter(e => selectedYears.has(parseInt(e[0].substring(0, 4))));
+    const evts = player.events.filter(e => selectedYears.has(parseInt(e[0].substring(0, 4))));
+    return { display: evts, stats: evts };
   }
-  // "By PAs" — last N events across all years
-  return player.events.slice(-paWindow);
+  // "By PAs": chart shows ALL events, stats use last N
+  return { display: player.events, stats: player.events.slice(-paWindow) };
 }
 
 function computeStats(events) {
@@ -343,22 +344,64 @@ function computeStats(events) {
 }
 
 /* ================================================================
+   COMPRESSED X-AXIS (skip offseason gaps)
+   ================================================================ */
+function buildCompressedScale(allTimestamps) {
+  const sorted = [...new Set(allTimestamps)].sort((a, b) => a - b);
+  if (sorted.length < 2) return { scale: () => 0.5, ticks: sorted, breaks: [] };
+
+  const MS_PER_DAY = 86400000;
+  const MAX_GAP = 14;        // days — anything bigger gets compressed
+  const COMPRESSED_GAP = 5;  // visual days for an offseason gap
+
+  const positions = [0];
+  const breaks = [];  // x-positions of offseason breaks
+  for (let i = 1; i < sorted.length; i++) {
+    const gapDays = (sorted[i] - sorted[i - 1]) / MS_PER_DAY;
+    if (gapDays > MAX_GAP) {
+      positions.push(positions[i - 1] + COMPRESSED_GAP);
+      breaks.push(positions[i - 1] + COMPRESSED_GAP / 2);
+    } else {
+      positions.push(positions[i - 1] + gapDays);
+    }
+  }
+  const total = positions[positions.length - 1] || 1;
+
+  function scale(t) {
+    let lo = 0, hi = sorted.length - 1;
+    if (t <= sorted[0]) return 0;
+    if (t >= sorted[hi]) return 1;
+    while (lo < hi - 1) {
+      const mid = (lo + hi) >> 1;
+      if (sorted[mid] <= t) lo = mid; else hi = mid;
+    }
+    const frac = (t - sorted[lo]) / (sorted[hi] - sorted[lo] || 1);
+    return (positions[lo] + frac * (positions[hi] - positions[lo])) / total;
+  }
+
+  return { scale, ticks: sorted, breaks };
+}
+
+/* ================================================================
    RENDER
    ================================================================ */
 function render() {
   const q = document.getElementById('search').value.trim().toLowerCase();
   const minPA = Math.max(1, parseInt(document.getElementById('minPA').value, 10) || 1);
 
-  // Compute stats for every player, attach selected events
   const rows = [];
+  const allTimestamps = [];
   for (const p of DATA.players) {
-    const evts = getSelectedEvents(p);
-    if (evts.length === 0) continue;
-    const s = computeStats(evts);
+    const { display, stats } = getEventsForPlayer(p);
+    if (display.length === 0) continue;
+    const s = computeStats(stats);
     if (s.pa < minPA) continue;
     if (q && !p.name.toLowerCase().includes(q)) continue;
-    rows.push({ ...p, ...s, _evts: evts });
+    rows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats });
+    for (const [d] of display) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
   }
+
+  compressedX = buildCompressedScale(allTimestamps);
 
   const dir = sort.dir === 'desc' ? -1 : 1;
   if (sort.key === 'name') {
@@ -366,18 +409,6 @@ function render() {
   } else {
     rows.sort((a, b) => dir * (a[sort.key] - b[sort.key]));
   }
-
-  // Global date extent for selected events
-  let lo = Infinity, hi = -Infinity;
-  for (const r of rows) {
-    for (const [d] of r._evts) {
-      const t = new Date(d + 'T12:00:00').getTime();
-      if (t < lo) lo = t;
-      if (t > hi) hi = t;
-    }
-  }
-  dateMin = lo;
-  dateMax = hi;
 
   // Update header arrows
   document.querySelectorAll('#thead-row th[data-key]').forEach(th => {
@@ -429,37 +460,36 @@ function drawAllCharts() {
     canvas.style.height = cssH + 'px';
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    drawScatter(ctx, canvas, row._evts, cssW, cssH);
+    drawScatter(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH);
   });
 }
 
-function drawScatter(ctx, canvas, events, w, h) {
+function drawScatter(ctx, canvas, displayEvents, statEvents, w, h) {
   const pad = { top: 4, right: 30, bottom: 12, left: 6 };
   const pw = w - pad.left - pad.right;
   const ph = h - pad.top - pad.bottom;
 
-  const MS_PER_DAY = 86400000;
-  const dayWidthPx = (MS_PER_DAY / (dateMax - dateMin || 1)) * pw;
-
-  const xScale = d => pad.left + ((d - dateMin) / (dateMax - dateMin || 1)) * pw;
+  const xScale = t => pad.left + compressedX.scale(t) * pw;
   const yScale = v => pad.top + ph - (v / Y_MAX) * ph;
   const yScaleWrc = v => {
     const clamped = Math.max(WRC_PLUS_MIN, Math.min(WRC_PLUS_MAX, v));
     return pad.top + ph - ((clamped - WRC_PLUS_MIN) / (WRC_PLUS_MAX - WRC_PLUS_MIN)) * ph;
   };
 
+  // Estimate day width in compressed space for intra-day spread
+  const MS_PER_DAY = 86400000;
+  const sampleT = compressedX.ticks.length > 1 ? compressedX.ticks[0] : Date.now();
+  const dayWidthPx = Math.abs(xScale(sampleT + MS_PER_DAY) - xScale(sampleT));
+
   // gridlines
-  ctx.strokeStyle = '#f0f0f0';
-  ctx.lineWidth = 0.5;
+  ctx.strokeStyle = '#f0f0f0'; ctx.lineWidth = 0.5;
   for (const g of [1, 2]) {
     const gy = yScale(g);
     ctx.beginPath(); ctx.moveTo(pad.left, gy); ctx.lineTo(w - pad.right, gy); ctx.stroke();
   }
 
   // wRC+ = 100 reference
-  ctx.strokeStyle = '#c7c7cc';
-  ctx.lineWidth = 0.5;
-  ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = '#c7c7cc'; ctx.lineWidth = 0.5; ctx.setLineDash([3, 3]);
   const y100 = yScaleWrc(100);
   ctx.beginPath(); ctx.moveTo(pad.left, y100); ctx.lineTo(w - pad.right, y100); ctx.stroke();
   ctx.setLineDash([]);
@@ -471,25 +501,43 @@ function drawScatter(ctx, canvas, events, w, h) {
   const baseY = yScale(0);
   ctx.beginPath(); ctx.moveTo(pad.left, baseY); ctx.lineTo(w - pad.right, baseY); ctx.stroke();
 
-  // month/year labels
+  // offseason break markers
+  ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 0.5; ctx.setLineDash([2, 2]);
+  for (const bx of compressedX.breaks) {
+    const xPos = pad.left + (bx / (compressedX.ticks.length > 1 ?
+      compressedX.scale(compressedX.ticks[compressedX.ticks.length - 1]) * pw / pw : 1)) * pw;
+  }
+  ctx.setLineDash([]);
+
+  // month/year labels along compressed x
   ctx.fillStyle = '#b0b0b0'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const dStart = new Date(dateMin), dEnd = new Date(dateMax);
-  let cur = new Date(dStart.getFullYear(), dStart.getMonth(), 15);
-  while (cur <= dEnd) {
-    const t = cur.getTime();
-    if (t >= dateMin && t <= dateMax) {
-      const label = (dEnd.getFullYear() - dStart.getFullYear() >= 1)
-        ? months[cur.getMonth()] + ' ' + String(cur.getFullYear()).slice(2)
-        : months[cur.getMonth()];
-      ctx.fillText(label, xScale(t), h - 1);
+  if (compressedX.ticks.length > 0) {
+    const dStart = new Date(compressedX.ticks[0]);
+    const dEnd = new Date(compressedX.ticks[compressedX.ticks.length - 1]);
+    const multiYear = dEnd.getFullYear() - dStart.getFullYear() >= 1;
+    const labeledMonths = new Set();
+    let cur = new Date(dStart.getFullYear(), dStart.getMonth(), 15);
+    while (cur <= dEnd) {
+      const t = cur.getTime();
+      const key = cur.getFullYear() * 100 + cur.getMonth();
+      if (!labeledMonths.has(key) && t >= compressedX.ticks[0] && t <= compressedX.ticks[compressedX.ticks.length - 1]) {
+        const label = multiYear
+          ? months[cur.getMonth()] + ' ' + String(cur.getFullYear()).slice(2)
+          : months[cur.getMonth()];
+        const xPos = xScale(t);
+        if (xPos > pad.left + 10 && xPos < w - pad.right - 10) {
+          ctx.fillText(label, xPos, h - 1);
+        }
+        labeledMonths.add(key);
+      }
+      cur.setMonth(cur.getMonth() + 1);
     }
-    cur.setMonth(cur.getMonth() + 1);
   }
 
-  // Group by date for intra-day spread
+  // Group display events by date for intra-day spread
   const byDate = new Map();
-  for (const e of events) {
+  for (const e of displayEvents) {
     const d = e[0];
     if (!byDate.has(d)) byDate.set(d, []);
     byDate.get(d).push(e);
@@ -514,16 +562,15 @@ function drawScatter(ctx, canvas, events, w, h) {
     const x = xScale(t) + xOff;
     const y = yScale(rv);
     const isOut = !EVENT_COLORS[evt];
-    const color = EVENT_COLORS[evt] || OUT_COLOR;
     ctx.globalAlpha = isOut ? 0.45 : 0.8;
-    ctx.fillStyle = color;
+    ctx.fillStyle = EVENT_COLORS[evt] || OUT_COLOR;
     ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI * 2); ctx.fill();
     pts.push({ x, y, r: 5, evt, date: dateStr, rv });
   }
   ctx.globalAlpha = 1;
 
-  // ── Running wRC+ line ──────────────────────────────────────
-  const chronological = [...events].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
+  // ── Running wRC+ line (uses ALL display events for full progression) ──
+  const chronological = [...displayEvents].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
   let wobaNumer = 0, wobaDenom = 0, paCount = 0;
   const linePoints = [];
   for (const [dateStr, evt, rv] of chronological) {
@@ -542,11 +589,8 @@ function drawScatter(ctx, canvas, events, w, h) {
     ctx.beginPath();
     ctx.moveTo(linePoints[0].x, linePoints[0].y);
     for (let i = 1; i < linePoints.length; i++) ctx.lineTo(linePoints[i].x, linePoints[i].y);
-    ctx.strokeStyle = WRC_LINE_COLOR;
-    ctx.lineWidth = 1.5;
-    ctx.globalAlpha = 0.7;
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+    ctx.strokeStyle = WRC_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.7;
+    ctx.stroke(); ctx.globalAlpha = 1;
   }
 
   pointsMap.set(canvas, pts);
@@ -617,7 +661,7 @@ document.addEventListener('mousemove', e => {
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (DATA) drawAllCharts(); }, 150);
+  resizeTimer = setTimeout(() => { if (DATA) render(); }, 150);
 });
 </script>
 </body>
