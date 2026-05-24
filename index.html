@@ -90,7 +90,7 @@
 <div class="controls">
   <input class="search" id="search" type="text" placeholder="Search player…">
   <div class="min-pa-wrap">
-    Min PA: <input class="min-pa" id="minPA" type="number" value="1" min="1" step="1">
+    Min PA: <input class="min-pa" id="minPA" type="number" value="60" min="1" step="1">
   </div>
   <div class="player-count" id="count"></div>
 </div>
@@ -130,7 +130,7 @@ const EVENT_COLORS = {
   intent_walk:  '#3b82f6',
   hit_by_pitch: '#a855f7',
 };
-const OUT_COLOR = '#d4d4d8';
+const OUT_COLOR = '#1c1c1f';
 const Y_MAX = 5;
 
 const LEGEND_ITEMS = [
@@ -147,7 +147,7 @@ const LEGEND_ITEMS = [
    STATE
    ================================================================ */
 let DATA = null;
-let sort = { key: 'hits', dir: 'desc' };
+let sort = { key: 'wrc_plus', dir: 'desc' };
 let filtered = [];
 let dateMin, dateMax;
 const canvasMap = new Map();   // canvas element → player obj
@@ -376,7 +376,7 @@ function drawScatter(ctx, canvas, events, w, h) {
     const y = yScale(rv);
     const isOut = !(evt in EVENT_COLORS);
     const color = EVENT_COLORS[evt] || OUT_COLOR;
-    const r = isOut ? 1.5 : 2.2;
+    const r = 1.5;
     const alpha = isOut ? 0.45 : 0.8;
 
     ctx.globalAlpha = alpha;
