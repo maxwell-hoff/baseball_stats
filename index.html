@@ -24,6 +24,7 @@
   .search{
     padding:7px 12px;border:1px solid #d1d5db;border-radius:6px;
     font-size:14px;width:260px;outline:none;transition:border .15s;
+    margin-left:auto;
   }
   .search:focus{border-color:#6366f1}
   .min-pa-wrap{display:flex;align-items:center;gap:6px;font-size:13px;color:#4b5563}
@@ -31,7 +32,13 @@
     width:64px;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;
     font-size:13px;text-align:center;outline:none;
   }
-  .player-count{font-size:13px;color:#6b7280;margin-left:auto}
+  .player-count{font-size:13px;color:#6b7280}
+
+  /* ── Chart zoom bar ─────────────────────────────────────────── */
+  .chart-zoom-bar{
+    display:flex;justify-content:flex-end;
+    margin-bottom:6px;
+  }
 
   /* zoom controls */
   .zoom-wrap{display:flex;align-items:center;gap:4px;font-size:13px;color:#4b5563}
@@ -125,7 +132,11 @@
 </div>
 
 <div class="controls">
-  <input class="search" id="search" type="text" placeholder="Search player…">
+  <select class="mode-select" id="groupBy">
+    <option value="player">By Player</option>
+    <option value="team-asis" selected>By Team – As-is</option>
+    <option value="team-aswas">By Team – As-was</option>
+  </select>
 
   <select class="mode-select" id="mode">
     <option value="season">By Season</option>
@@ -135,25 +146,23 @@
 
   <div class="year-btns" id="yearBtns"></div>
 
-  <select class="mode-select" id="groupBy">
-    <option value="player">By Player</option>
-    <option value="team-asis">By Team – As-is</option>
-    <option value="team-aswas">By Team – As-was</option>
-  </select>
-
   <div class="min-pa-wrap">
     Min PA: <input class="min-pa" id="minPA" type="number" value="60" min="1" step="1">
   </div>
+  <div class="player-count" id="count"></div>
+  <input class="search" id="search" type="text" placeholder="Search team…">
+</div>
+
+<div class="legend" id="legend"></div>
+
+<div class="chart-zoom-bar">
   <div class="zoom-wrap">
     Chart:
     <button class="zoom-btn" id="zoomOut">−</button>
     <span class="zoom-label" id="zoomLabel">1x</span>
     <button class="zoom-btn" id="zoomIn">+</button>
   </div>
-  <div class="player-count" id="count"></div>
 </div>
-
-<div class="legend" id="legend"></div>
 
 <div class="table-wrap">
   <table>
@@ -233,7 +242,7 @@ let selectedYears = new Set();   // for season mode
 let paWindowKey = 'season';      // 'season' | 'month'
 let chartZoom = 1;               // 1x, 2x, 4x, 8x
 const ZOOM_STEPS = [1, 2, 4, 8];
-let groupBy = 'player';          // 'player' | 'team-asis' | 'team-aswas'
+let groupBy = 'team-asis';       // 'player' | 'team-asis' | 'team-aswas'
 let chartType = 'bar';           // 'scatter' | 'bar'
 const expandedTeams = new Set();
 
