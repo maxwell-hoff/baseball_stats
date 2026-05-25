@@ -620,45 +620,4 @@ def main():
     df = fetch_statcast(years)
 
     # 2. Build PA dataset
-    print("\n── Building PA dataset ─────────────────────────────────────\n")
-    pa = build_pa_dataset(df)
-
-    # 2b. Extract SB/CS from full pitch data
-    print("\n── Extracting SB/CS events ─────────────────────────────────\n")
-    sb_cs_df = extract_sb_cs(df)
-
-    # 3. Run expectancy matrix
-    print("\n── Computing run expectancy matrix ─────────────────────────")
-    re_matrix = compute_re_matrix(pa)
-    print_re_matrix(re_matrix)
-
-    # 4. RE24 per PA
-    print("── Computing RE24 per PA ──────────────────────────────────\n")
-    pa = compute_re24(pa, re_matrix)
-    valid = pa["re24"].notna().sum()
-    print(f"    {valid:,} PAs with valid RE24 values")
-
-    # 5. Event weights
-    event_weights = compute_event_weights(pa[pa["re24"].notna()])
-    print_event_weights(event_weights, years)
-
-    # 6. SB/CS values
-    print("── Stolen base / caught stealing ───────────────────────────")
-    sb_cs = compute_sb_cs_values(sb_cs_df, re_matrix)
-    print_sb_cs(sb_cs)
-
-    # 7. Regression with pitch count
-    print("── Pitch count regression ──────────────────────────────────")
-    reg = run_pitch_regression(pa[pa["re24"].notna()].copy())
-    print_regression(reg)
-
-    # 8. Caveats
-    print_caveats()
-
-    # 9. Export
-    print("── Exporting weights ───────────────────────────────────────\n")
-    export_weights(event_weights, sb_cs, reg, years)
-
-
-if __name__ == "__main__":
-    main()
+    print("\n── Building PA data

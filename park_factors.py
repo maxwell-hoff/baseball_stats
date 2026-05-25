@@ -27,6 +27,7 @@ YEARS = range(2018, 2027)
 REGRESSION_GAMES = 0        # 0 = no regression; try 60-80 for moderate
 SPLIT_BY_HANDEDNESS = True
 MIN_PA_PER_PARK = 500
+EXCLUDE_HOME_BATTERS = True  # only use visiting-team PAs at each park
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -175,11 +176,15 @@ def compute_park_factors(
     min_pa: int = 500,
     renovation_cutoffs: dict | None = None,
     year_filter: list[int] | None = None,
+    exclude_home_batters: bool = False,
 ) -> pd.DataFrame:
     """
     For each stadium, compare mean run_value of PAs at that stadium vs.
     mean run_value of all other PAs league-wide (excluding that stadium).
     Computed per-year then averaged, so year-to-year league trends cancel out.
+
+    If exclude_home_batters=True, only visiting-team PAs are used at each
+    park, removing the bias from teams building rosters for their home park.
     """
     if renovation_cutoffs is None:
         renovation_cutoffs = {}
@@ -206,6 +211,8 @@ def compute_park_factors(
             for yr in valid_years:
                 yr_pa = pa[pa["year"] == yr]
                 at_park = yr_pa[yr_pa["home_team"] == team]
+                if exclude_home_batters:
+                    at_park = at_park[at_park["inning_topbot"] == "Top"]
                 rest = yr_pa[yr_pa["home_team"] != team]
 
                 if hand:
@@ -270,7 +277,7 @@ def compute_park_factors(
         all_pf = compute_park_factors(
             pa, split_hand=False, regression_games=regression_games,
             min_pa=min_pa, renovation_cutoffs=renovation_cutoffs,
-            year_filter=year_filter,
+            year_filter=year_filter, exclude_home_batters=exclude_home_batters,
         )
         return pd.concat([all_pf, pd.DataFrame(results)], ignore_index=True)
 
@@ -294,12 +301,12 @@ def split_half_correlation(pa: pd.DataFrame, renovation_cutoffs: dict) -> dict:
     pf_odd = compute_park_factors(
         pa, split_hand=SPLIT_BY_HANDEDNESS, regression_games=REGRESSION_GAMES,
         min_pa=max(200, MIN_PA_PER_PARK // 2), renovation_cutoffs=renovation_cutoffs,
-        year_filter=odd_years,
+        year_filter=odd_years, exclude_home_batters=EXCLUDE_HOME_BATTERS,
     )
     pf_even = compute_park_factors(
         pa, split_hand=SPLIT_BY_HANDEDNESS, regression_games=REGRESSION_GAMES,
         min_pa=max(200, MIN_PA_PER_PARK // 2), renovation_cutoffs=renovation_cutoffs,
-        year_filter=even_years,
+        year_filter=even_years, exclude_home_batters=EXCLUDE_HOME_BATTERS,
     )
 
     correlations = {}
@@ -528,7 +535,8 @@ def main():
     print(f"  Park Factor Exploration")
     print(f"  Years: {min(YEARS)}-{max(YEARS)} | "
           f"Regression: {REGRESSION_GAMES} games | "
-          f"Handedness: {'on' if SPLIT_BY_HANDEDNESS else 'off'}")
+          f"Handedness: {'on' if SPLIT_BY_HANDEDNESS else 'off'} | "
+          f"Home batters: {'excluded' if EXCLUDE_HOME_BATTERS else 'included'}")
     print(f"{'=' * 70}\n")
 
     # 1. Fetch data
@@ -543,6 +551,7 @@ def main():
         regression_games=REGRESSION_GAMES,
         min_pa=MIN_PA_PER_PARK,
         renovation_cutoffs=RENOVATION_CUTOFFS,
+        exclude_home_batters=EXCLUDE_HOME_BATTERS,
     )
     print_park_factors(pf)
 

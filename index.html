@@ -1006,25 +1006,4 @@ document.addEventListener('mousemove', e => {
     tooltip.style.opacity = 1;
     tooltip.style.left = (e.clientX + 14) + 'px';
     tooltip.style.top  = (e.clientY - 10) + 'px';
-    const windowLabel = viewMode === 'pa' ? ` (last ${bestLine.paNum} PA)` : ` · After ${bestLine.paNum} PA`;
-    if (bestLine.type === 'xwoba') {
-      tooltip.innerHTML = `<strong>xwOBA ${bestLine.xwoba.toFixed(3)}</strong> (xwRC+ ${Math.round(bestLine.xWrcPlus)})<br>` +
-        `${bestLine.date}${windowLabel}`;
-    } else {
-      tooltip.innerHTML = `<strong>wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
-        `${bestLine.date}${windowLabel}`;
-    }
-  } else {
-    tooltip.style.opacity = 0;
-  }
-});
-
-/* ── Resize handler ──────────────────────────────────────────── */
-let resizeTimer;
-window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (DATA) render(); }, 150);
-});
-</script>
-</body>
-</html>
+    const windowLabel = viewMode === 'pa' ? ` (las
