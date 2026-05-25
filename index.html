@@ -150,7 +150,7 @@
   </div>
   <select class="mode-select" id="chartType">
     <option value="scatter">Scatter</option>
-    <option value="bar">Stacked Bar</option>
+    <option value="bar" selected>Stacked Bar</option>
   </select>
 
   <div class="zoom-wrap">
@@ -199,7 +199,8 @@ const EVENT_COLORS = {
   hit_by_pitch: '#a855f7',
 };
 const OUT_COLOR = '#1c1c1f';
-const Y_MAX = 2.037;
+const Y_MAX_DEFAULT = 2.037;
+let yMax = Y_MAX_DEFAULT;
 const WRC_PLUS_MIN = 0;
 const WRC_PLUS_MAX = 250;
 const WRC_LINE_COLOR = '#6366f1';
@@ -241,7 +242,7 @@ let paWindowKey = 'season';      // 'season' | 'month'
 let chartZoom = 1;               // 1x, 2x, 4x, 8x
 const ZOOM_STEPS = [1, 2, 4, 8];
 let groupBy = 'player';          // 'player' | 'team-asis' | 'team-aswas'
-let chartType = 'scatter';       // 'scatter' | 'bar'
+let chartType = 'bar';           // 'scatter' | 'bar'
 const expandedTeams = new Set();
 
 const PA_WINDOWS = {
@@ -251,6 +252,9 @@ const PA_WINDOWS = {
 
 // Current league constants (set from most recent selected year)
 let curLC = { lgwOBA: 0.313, wOBAScale: 1.232, lgRPA: 0.118 };
+
+// Park factors: { All: {team: pf}, L: {team: pf}, R: {team: pf} }
+let PARK_FACTORS = null;
 
 /* ================================================================
    BOOT
@@ -268,6 +272,11 @@ document.addEventListener('DOMContentLoaded', async () => {
        </td></tr>`;
     return;
   }
+
+  try {
+    const pfResp = await fetch('data/park_factors.json');
+    if (pfResp.ok) PARK_FACTORS = await pfResp.json();
+  } catch (_) { /* park factors optional */ }
 
   const years = DATA.years_available;
   document.getElementById('season').textContent = years.join(', ') + ' Season' + (years.length > 1 ? 's' : '');
@@ -296,6 +305,17 @@ function syncLC() {
   if (DATA.league_constants[key]) {
     curLC = DATA.league_constants[key];
   }
+}
+
+function getParkFactor(stadium, hand) {
+  if (!PARK_FACTORS || !stadium) return 1.0;
+  if (hand && PARK_FACTORS[hand] && PARK_FACTORS[hand][stadium] != null) {
+    return PARK_FACTORS[hand][stadium] / 100;
+  }
+  if (PARK_FACTORS.All && PARK_FACTORS.All[stadium] != null) {
+    return PARK_FACTORS.All[stadium] / 100;
+  }
+  return 1.0;
 }
 
 /* ================================================================
@@ -450,12 +470,15 @@ function getPlayersForTeam(teamAbbr) {
 function computeStats(events) {
   let pa = 0, hits = 0, walks = 0, wobaN = 0, wobaD = 0;
   let xwobaN = 0, xwobaD = 0;
+  let pfSum = 0, pfCount = 0;
   for (const e of events) {
-    const [, evt, rv, , , xw] = e;
+    const [, evt, rv, , , xw, stadium, hand] = e;
     pa++;
     if (HIT_EVENTS.has(evt)) hits++;
     if (WALK_EVENTS.has(evt)) walks++;
     wobaN += rv;
+    pfSum += getParkFactor(stadium, hand);
+    pfCount++;
     if (!WOBA_DENOM_EXCLUDE.has(evt)) {
       wobaD++;
       xwobaD++;
@@ -464,7 +487,10 @@ function computeStats(events) {
   }
   const woba = wobaD > 0 ? wobaN / wobaD : 0;
   const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
-  const wrc_plus = Math.round(((wraaPerPa + curLC.lgRPA) / curLC.lgRPA) * 100);
+  const meanPF = pfCount > 0 ? pfSum / pfCount : 1.0;
+  const wrc_plus = Math.round(
+    ((wraaPerPa + curLC.lgRPA + (curLC.lgRPA - meanPF * curLC.lgRPA)) / curLC.lgRPA) * 100
+  );
   const xwoba = xwobaD > 0 ? xwobaN / xwobaD : 0;
   return { pa, hits, walks, woba, wrc_plus, xwoba };
 }
@@ -536,6 +562,21 @@ function render() {
   }
 
   compressedX = buildCompressedScale(allTimestamps);
+
+  // Compute dynamic y-axis max: largest per-game positive run-value total across all visible entities
+  let maxGameRV = Y_MAX_DEFAULT;
+  for (const r of rows) {
+    const byDate = new Map();
+    for (const e of r._displayEvts) {
+      const d = e[0];
+      if (!byDate.has(d)) byDate.set(d, 0);
+      if (e[2] > 0) byDate.set(d, byDate.get(d) + e[2]);
+    }
+    for (const total of byDate.values()) {
+      if (total > maxGameRV) maxGameRV = total;
+    }
+  }
+  yMax = maxGameRV * 1.05;
 
   const dir = sort.dir === 'desc' ? -1 : 1;
   if (sort.key === 'name') {
@@ -692,7 +733,7 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
   const ph = h - pad.top - pad.bottom;
 
   const xScale = t => pad.left + (1 - compressedX.scale(t)) * pw;
-  const yScale = v => pad.top + ph - (v / Y_MAX) * ph;
+  const yScale = v => pad.top + ph - (v / yMax) * ph;
   const yScaleWrc = v => {
     const clamped = Math.max(WRC_PLUS_MIN, Math.min(WRC_PLUS_MAX, v));
     return pad.top + ph - ((clamped - WRC_PLUS_MIN) / (WRC_PLUS_MAX - WRC_PLUS_MIN)) * ph;
@@ -765,22 +806,25 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
   const pts = [];
   if (chartType === 'bar') {
     const barW = Math.max(1, Math.min(dayWidthPx * 0.7, 8));
-    const OUT_MIN_H = 1;
     for (const [dateStr, group] of byDate) {
       const t = new Date(dateStr + 'T12:00:00').getTime();
       const cx = xScale(t);
-      const sorted = [...group].sort((a, b) => {
+      const positive = group.filter(e => e[2] > 0);
+      if (positive.length === 0) {
+        pts.push({ x: cx, y: baseY, r: barW / 2 + 3, evt: 'field_out', date: dateStr, rv: 0 });
+        continue;
+      }
+      positive.sort((a, b) => {
         const ai = BAR_STACK_ORDER.indexOf(a[1]);
         const bi = BAR_STACK_ORDER.indexOf(b[1]);
         return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi);
       });
       let curY = baseY;
-      for (const e of sorted) {
+      for (const e of positive) {
         const [, evt, rv] = e;
-        const isOut = !EVENT_COLORS[evt];
-        const segH = rv > 0 ? (rv / Y_MAX) * ph : OUT_MIN_H;
+        const segH = (rv / yMax) * ph;
         const segTop = curY - segH;
-        ctx.globalAlpha = isOut ? 0.55 : 0.85;
+        ctx.globalAlpha = 0.85;
         ctx.fillStyle = EVENT_COLORS[evt] || OUT_COLOR;
         ctx.fillRect(cx - barW / 2, segTop, barW, segH);
         pts.push({ x: cx, y: segTop + segH / 2, r: barW / 2 + 3, evt, date: dateStr, rv });
@@ -820,18 +864,22 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
 
   let wobaNumer = 0, wobaDenom = 0;
   let xwobaNumer = 0, xwobaDenom = 0;
+  let pfSum = 0, pfCount = 0;
   const win = [];
   const linePoints = [];
   const xLinePoints = [];
 
   for (const e of chronological) {
-    const [dateStr, evt, rv, , , xw] = e;
+    const [dateStr, evt, rv, , , xw, stadium, hand] = e;
     const inDenom = !WOBA_DENOM_EXCLUDE.has(evt);
     const xVal = (xw != null && inDenom) ? xw : (inDenom ? rv : 0);
-    win.push({ rv, inDenom, xVal });
+    const pf = getParkFactor(stadium, hand);
+    win.push({ rv, inDenom, xVal, pf });
     wobaNumer += rv;
     xwobaNumer += xVal;
     if (inDenom) { wobaDenom++; xwobaDenom++; }
+    pfSum += pf;
+    pfCount++;
 
     if (useRolling) {
       while (win.length > paCount) {
@@ -839,6 +887,8 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
         wobaNumer -= old.rv;
         xwobaNumer -= old.xVal;
         if (old.inDenom) { wobaDenom--; xwobaDenom--; }
+        pfSum -= old.pf;
+        pfCount--;
       }
     }
 
@@ -847,9 +897,10 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
       const t = new Date(dateStr + 'T12:00:00').getTime();
       const x = xScale(t);
 
+      const meanPF = pfCount > 0 ? pfSum / pfCount : 1.0;
       const woba = wobaNumer / wobaDenom;
       const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
-      const wrcPlus = ((wraaPerPa + curLC.lgRPA) / curLC.lgRPA) * 100;
+      const wrcPlus = ((wraaPerPa + curLC.lgRPA + (curLC.lgRPA - meanPF * curLC.lgRPA)) / curLC.lgRPA) * 100;
       linePoints.push({ x, y: yScaleWrc(wrcPlus), wrcPlus, paNum: win.length, date: dateStr });
 
       const xw2 = xwobaNumer / xwobaDenom;

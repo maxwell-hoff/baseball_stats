@@ -10,6 +10,8 @@ Usage:
     python park_factors.py
 """
 
+import json
+import os
 import sys
 from datetime import date
 
@@ -175,9 +177,9 @@ def compute_park_factors(
     year_filter: list[int] | None = None,
 ) -> pd.DataFrame:
     """
-    For each stadium (home_team), compare mean run_value of all PAs in
-    home games vs. all PAs when the home team plays on the road.
-    Both sides include offense by BOTH teams, isolating the park effect.
+    For each stadium, compare mean run_value of PAs at that stadium vs.
+    mean run_value of all other PAs league-wide (excluding that stadium).
+    Computed per-year then averaged, so year-to-year league trends cancel out.
     """
     if renovation_cutoffs is None:
         renovation_cutoffs = {}
@@ -187,53 +189,83 @@ def compute_park_factors(
 
     results = []
     teams = sorted(pa["home_team"].unique())
+    all_years = sorted(pa["year"].unique())
 
     for team in teams:
         cutoff = renovation_cutoffs.get(team, int(pa["year"].min()))
-        tpa = pa[pa["year"] >= cutoff]
-
-        home_pa = tpa[tpa["home_team"] == team]
-        road_pa = tpa[tpa["away_team"] == team]
+        valid_years = [y for y in all_years if y >= cutoff]
+        if not valid_years:
+            continue
 
         hands = ["L", "R"] if split_hand else [None]
         for hand in hands:
-            hp = home_pa[home_pa["stand"] == hand] if hand else home_pa
-            rp = road_pa[road_pa["stand"] == hand] if hand else road_pa
+            yearly_ratios = []
+            total_home_pa = 0
+            total_rest_pa = 0
 
-            n_home, n_road = len(hp), len(rp)
-            if n_home < min_pa or n_road < min_pa:
+            for yr in valid_years:
+                yr_pa = pa[pa["year"] == yr]
+                at_park = yr_pa[yr_pa["home_team"] == team]
+                rest = yr_pa[yr_pa["home_team"] != team]
+
+                if hand:
+                    at_park = at_park[at_park["stand"] == hand]
+                    rest = rest[rest["stand"] == hand]
+
+                if len(at_park) < 50 or len(rest) < 50:
+                    continue
+
+                park_mean = at_park["run_value"].mean()
+                rest_mean = rest["run_value"].mean()
+                if rest_mean == 0:
+                    continue
+
+                yearly_ratios.append({
+                    "ratio": park_mean / rest_mean,
+                    "park_pa": len(at_park),
+                    "rest_pa": len(rest),
+                    "park_rv": park_mean,
+                    "rest_rv": rest_mean,
+                })
+                total_home_pa += len(at_park)
+                total_rest_pa += len(rest)
+
+            if not yearly_ratios or total_home_pa < min_pa:
                 continue
 
-            home_mean = hp["run_value"].mean()
-            road_mean = rp["run_value"].mean()
-            if road_mean == 0:
-                continue
-
-            raw_pf = home_mean / road_mean
+            weights = [r["park_pa"] for r in yearly_ratios]
+            raw_pf = np.average(
+                [r["ratio"] for r in yearly_ratios], weights=weights
+            )
 
             if regression_games > 0:
-                approx_games = n_home / 38
+                approx_games = total_home_pa / 38
                 pf = (raw_pf * approx_games + 1.0 * regression_games) / (
                     approx_games + regression_games
                 )
             else:
                 pf = raw_pf
 
-            yrs_used = sorted(tpa[tpa["home_team"] == team]["year"].unique())
+            avg_park_rv = np.average(
+                [r["park_rv"] for r in yearly_ratios], weights=weights
+            )
+            avg_rest_rv = np.average(
+                [r["rest_rv"] for r in yearly_ratios], weights=weights
+            )
+
             results.append({
                 "team": team,
                 "hand": hand or "All",
                 "pf": round(pf * 100, 1),
                 "pf_raw": round(raw_pf * 100, 1),
-                "home_pa": n_home,
-                "road_pa": n_road,
-                "home_rv": round(home_mean, 4),
-                "road_rv": round(road_mean, 4),
-                "years": f"{min(yrs_used)}-{max(yrs_used)}" if len(yrs_used) > 1 else str(yrs_used[0]),
-                "n_years": len(yrs_used),
+                "home_pa": total_home_pa,
+                "rest_pa": total_rest_pa,
+                "home_rv": round(avg_park_rv, 4),
+                "rest_rv": round(avg_rest_rv, 4),
+                "years": f"{min(valid_years)}-{max(valid_years)}" if len(valid_years) > 1 else str(valid_years[0]),
+                "n_years": len(valid_years),
             })
 
-    # Also compute combined "All" even when splitting by hand
     if split_hand:
         all_pf = compute_park_factors(
             pa, split_hand=False, regression_games=regression_games,
@@ -411,12 +443,12 @@ def print_park_factors(pf_df: pd.DataFrame):
         subset = pf_df[pf_df["hand"] == hand_label].sort_values("pf", ascending=False)
         label = {"All": "OVERALL", "L": "LEFT-HANDED BATTERS", "R": "RIGHT-HANDED BATTERS"}[hand_label]
         print(f"  ── {label} {'─' * (55 - len(label))}")
-        print(f"  {'Team':<6} {'PF':>6} {'Raw':>6} {'HomePAs':>8} {'RoadPAs':>8} {'HomeRV':>8} {'RoadRV':>8} {'Years':>10}")
-        print(f"  {'─' * 68}")
+        print(f"  {'Team':<6} {'PF':>6} {'Raw':>6} {'ParkPAs':>8} {'RestPAs':>9} {'ParkRV':>8} {'RestRV':>8} {'Years':>10}")
+        print(f"  {'─' * 69}")
         for _, r in subset.iterrows():
             print(f"  {r['team']:<6} {r['pf']:>6.1f} {r['pf_raw']:>6.1f} "
-                  f"{r['home_pa']:>8,} {r['road_pa']:>8,} "
-                  f"{r['home_rv']:>8.4f} {r['road_rv']:>8.4f} {r['years']:>10}")
+                  f"{r['home_pa']:>8,} {r['rest_pa']:>9,} "
+                  f"{r['home_rv']:>8.4f} {r['rest_rv']:>8.4f} {r['years']:>10}")
         print()
 
 
@@ -526,6 +558,30 @@ def main():
     print("─── Per-game adjustment preview ─────────────────────────\n")
     preview = per_game_preview(all_pa, pf)
     print_per_game_preview(preview)
+
+    # 6. Export to JSON for the website
+    export_json(pf)
+
+
+def export_json(pf_df: pd.DataFrame):
+    """Export park factors to data/park_factors.json for use by the website."""
+    out = {}
+    for hand_label in ["All", "L", "R"]:
+        subset = pf_df[pf_df["hand"] == hand_label]
+        if subset.empty:
+            continue
+        out[hand_label] = {
+            row["team"]: row["pf"] for _, row in subset.iterrows()
+        }
+
+    os.makedirs("data", exist_ok=True)
+    path = os.path.join("data", "park_factors.json")
+    with open(path, "w") as f:
+        json.dump(out, f, indent=2)
+    print_header("EXPORTED")
+    print(f"  Wrote {path}")
+    print(f"  Keys: {list(out.keys())}")
+    print(f"  Teams per key: {', '.join(str(len(v)) for v in out.values())}\n")
 
 
 if __name__ == "__main__":

@@ -125,13 +125,16 @@ def build_player_json(all_pa: pd.DataFrame) -> list[dict]:
         p = players[bid]
         team = row.away_team if row.inning_topbot == "Top" else row.home_team
         xw = row.estimated_woba_using_speedangle
+        stand = row.stand if hasattr(row, "stand") and pd.notna(row.stand) else None
         p["events"].append([
-            row.game_date_str,
-            row.events,
-            round(row.run_value, 3),
-            int(row.at_bat_number),
-            team,
-            round(xw, 3) if pd.notna(xw) else None,
+            row.game_date_str,   # [0]
+            row.events,          # [1]
+            round(row.run_value, 3),  # [2]
+            int(row.at_bat_number),   # [3]
+            team,                # [4] batting team
+            round(xw, 3) if pd.notna(xw) else None,  # [5] xwOBA
+            row.home_team,       # [6] stadium (home team of game)
+            stand,               # [7] batter handedness (L/R)
         ])
 
         if row.game_date_str >= p["_last_date"]:
