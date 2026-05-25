@@ -46,7 +46,7 @@
   .zoom-label{font-size:12px;min-width:28px;text-align:center;font-variant-numeric:tabular-nums}
 
   /* mode / year / PA selectors */
-  .mode-select,.pa-select{
+  .mode-select{
     padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;
     font-size:13px;background:#fff;outline:none;cursor:pointer;
   }
@@ -129,15 +129,11 @@
 
   <select class="mode-select" id="mode">
     <option value="season">By Season</option>
-    <option value="pa">By PAs</option>
+    <option value="rolling-season">Rolling Average – Season (~6,000 PA/team, ~600 PA/player)</option>
+    <option value="rolling-month">Rolling Average – Month (~1,000 PA/team, ~60 PA/player)</option>
   </select>
 
   <div class="year-btns" id="yearBtns"></div>
-
-  <select class="pa-select hidden" id="paWindow">
-    <option value="season">Season (~6,000/team, ~600/player)</option>
-    <option value="month">Month (~1,000/team, ~60/player)</option>
-  </select>
 
   <select class="mode-select" id="groupBy">
     <option value="player">By Player</option>
@@ -148,11 +144,6 @@
   <div class="min-pa-wrap">
     Min PA: <input class="min-pa" id="minPA" type="number" value="60" min="1" step="1">
   </div>
-  <select class="mode-select" id="chartType">
-    <option value="scatter">Scatter</option>
-    <option value="bar" selected>Stacked Bar</option>
-  </select>
-
   <div class="zoom-wrap">
     Chart:
     <button class="zoom-btn" id="zoomOut">−</button>
@@ -374,21 +365,16 @@ function bindControls() {
   });
 
   document.getElementById('mode').addEventListener('change', e => {
-    viewMode = e.target.value;
+    const val = e.target.value;
+    if (val === 'season') {
+      viewMode = 'season';
+    } else {
+      viewMode = 'pa';
+      paWindowKey = val === 'rolling-season' ? 'season' : 'month';
+    }
     document.getElementById('yearBtns').classList.toggle('hidden', viewMode !== 'season');
-    document.getElementById('paWindow').classList.toggle('hidden', viewMode !== 'pa');
     syncLC();
     render();
-  });
-
-  document.getElementById('paWindow').addEventListener('change', e => {
-    paWindowKey = e.target.value;
-    render();
-  });
-
-  document.getElementById('chartType').addEventListener('change', e => {
-    chartType = e.target.value;
-    drawAllCharts();
   });
 
   document.getElementById('zoomIn').addEventListener('click', () => {
