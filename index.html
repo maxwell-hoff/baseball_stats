@@ -176,6 +176,7 @@
         <th class="col-num" data-key="pa">PA <span class="arrow"></span></th>
         <th class="col-num" data-key="hits">Hits <span class="arrow"></span></th>
         <th class="col-num" data-key="walks">BB <span class="arrow"></span></th>
+        <th class="col-num" data-key="bsr">BsR <span class="arrow"></span></th>
         <th class="col-chart">Plate Appearance Run Values</th>
       </tr>
     </thead>
@@ -267,7 +268,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     DATA = await resp.json();
   } catch (e) {
     document.getElementById('tbody').innerHTML =
-      `<tr><td colspan="9" class="msg error">
+      `<tr><td colspan="10" class="msg error">
          Could not load data/player_data.json — run <code>python fetch_data.py</code> first.
        </td></tr>`;
     return;
@@ -431,23 +432,38 @@ function buildTeamRows(mode) {
     for (const p of DATA.players) {
       const abbr = p.team;
       if (!abbr) continue;
-      if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [] });
+      if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [], bsr: 0, sb: 0, cs: 0 });
       const t = teams.get(abbr);
       for (const e of p.events) t.events.push(e);
+      t.bsr += (p.bsr ?? 0);
+      t.sb += (p.sb ?? 0);
+      t.cs += (p.cs ?? 0);
     }
   } else {
+    const playerTeamBsr = new Map();
     for (const p of DATA.players) {
       for (const e of p.events) {
         const abbr = e[4];
         if (!abbr) continue;
-        if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [] });
+        if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [], bsr: 0, sb: 0, cs: 0 });
         teams.get(abbr).events.push(e);
+      }
+      const key = `${p.name}_${p.team}`;
+      if (!playerTeamBsr.has(key)) {
+        playerTeamBsr.set(key, true);
+        const abbr = p.team;
+        if (abbr && teams.has(abbr)) {
+          teams.get(abbr).bsr += (p.bsr ?? 0);
+          teams.get(abbr).sb += (p.sb ?? 0);
+          teams.get(abbr).cs += (p.cs ?? 0);
+        }
       }
     }
   }
 
   for (const t of teams.values()) {
     t.events.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
+    t.bsr = Math.round(t.bsr * 10) / 10;
   }
 
   return [...teams.values()];
@@ -616,6 +632,7 @@ function render() {
         <td class="col-num">${r.pa}</td>
         <td class="col-num">${r.hits}</td>
         <td class="col-num">${r.walks}</td>
+        <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
         <td class="col-chart"><canvas></canvas></td>`;
       tr.addEventListener('click', () => {
         if (expandedTeams.has(r.team)) expandedTeams.delete(r.team);
@@ -647,6 +664,7 @@ function render() {
             <td class="col-num">${pr.pa}</td>
             <td class="col-num">${pr.hits}</td>
             <td class="col-num">${pr.walks}</td>
+            <td class="col-num">${(pr.bsr ?? 0).toFixed(1)}</td>
             <td class="col-chart"><canvas></canvas></td>`;
           frag.appendChild(subTr);
           canvasMap.set(subTr.querySelector('canvas'), pr);
@@ -662,6 +680,7 @@ function render() {
         <td class="col-num">${r.pa}</td>
         <td class="col-num">${r.hits}</td>
         <td class="col-num">${r.walks}</td>
+        <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
         <td class="col-chart"><canvas></canvas></td>`;
       frag.appendChild(tr);
       canvasMap.set(tr.querySelector('canvas'), r);

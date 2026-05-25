@@ -17,40 +17,49 @@ import argparse
 import json
 import os
 import sys
+from collections import defaultdict
 from datetime import date, datetime
 
+import numpy as np
 import pandas as pd
 import pybaseball
 
 
 # ── wOBA linear weights + league constants (FanGraphs Guts!) ─────────
 # Updated yearly — https://www.fangraphs.com/tools/guts
+# wK derived from RE24 regression: K is ~0.019 runs worse than avg out,
+# converted to wOBA scale: wK = -0.019 × wOBAScale
 WEIGHTS_BY_YEAR = {
     2023: {
         "wBB": 0.696, "wHBP": 0.726, "w1B": 0.883,
         "w2B": 1.244, "w3B": 1.569, "wHR": 2.015,
+        "wK": -0.023,
         "lgwOBA": 0.318, "wOBAScale": 1.204, "lgRPA": 0.119,
     },
     2024: {
         "wBB": 0.689, "wHBP": 0.720, "w1B": 0.882,
         "w2B": 1.254, "w3B": 1.590, "wHR": 2.050,
+        "wK": -0.024,
         "lgwOBA": 0.310, "wOBAScale": 1.242, "lgRPA": 0.117,
     },
     2025: {
         "wBB": 0.691, "wHBP": 0.722, "w1B": 0.882,
         "w2B": 1.252, "w3B": 1.584, "wHR": 2.037,
+        "wK": -0.023,
         "lgwOBA": 0.313, "wOBAScale": 1.232, "lgRPA": 0.118,
     },
 }
 
 EVENT_WEIGHT_KEY = {
-    "single":       "w1B",
-    "double":       "w2B",
-    "triple":       "w3B",
-    "home_run":     "wHR",
-    "walk":         "wBB",
-    "intent_walk":  "wBB",
-    "hit_by_pitch": "wHBP",
+    "single":                "w1B",
+    "double":                "w2B",
+    "triple":                "w3B",
+    "home_run":              "wHR",
+    "walk":                  "wBB",
+    "intent_walk":           "wBB",
+    "hit_by_pitch":          "wHBP",
+    "strikeout":             "wK",
+    "strikeout_double_play": "wK",
 }
 
 PA_EVENTS = {
@@ -64,6 +73,13 @@ PA_EVENTS = {
     "sac_fly_double_play", "sac_bunt_double_play",
     "catcher_interf", "other_out",
 }
+
+GDP_EVENTS = {"grounded_into_double_play", "double_play", "triple_play"}
+
+# RE24-derived run values from compute_weights.py
+SB_RUN_VALUE = 0.2
+CS_RUN_VALUE = -0.5
+GDP_EXTRA_COST = 0.39
 
 
 def get_weights(year: int) -> dict:
@@ -100,7 +116,85 @@ def fetch_season(year: int) -> pd.DataFrame:
     return df
 
 
-def build_player_json(all_pa: pd.DataFrame) -> list[dict]:
+def compute_bsr(full_df: pd.DataFrame, all_pa: pd.DataFrame) -> dict:
+    """
+    Compute simplified BsR (Baserunning Runs) per batter from Statcast.
+    Components:
+      wSB  – weighted stolen base runs (SB/CS attributed to runners)
+      wGDP – weighted GDP avoidance runs
+    Note: UBR (extra bases on hits/outs) is omitted.
+    """
+    desc_col = "des" if "des" in full_df.columns else "description"
+    if desc_col not in full_df.columns:
+        print("    No description column; skipping BsR.")
+        return {}
+
+    # ── wSB: attribute SB/CS to the runner ─────────────────────────
+    desc_lower = full_df[desc_col].fillna("").str.lower()
+    sb_mask = desc_lower.str.contains("steals", na=False) & ~desc_lower.str.contains("caught", na=False)
+    cs_mask = desc_lower.str.contains("caught stealing", na=False)
+
+    runner_events: dict[int, dict] = defaultdict(lambda: {"sb": 0, "cs": 0})
+
+    for mask_series, evt_type in [(sb_mask, "sb"), (cs_mask, "cs")]:
+        subset = full_df[mask_series]
+        if subset.empty:
+            continue
+        sub_desc = subset[desc_col].str.lower()
+        to_2nd = sub_desc.str.contains("2nd|second", na=False, regex=True)
+        to_3rd = sub_desc.str.contains("3rd|third", na=False, regex=True)
+        to_home = sub_desc.str.contains("home|scores", na=False, regex=True)
+
+        for cond, col in [(to_2nd, "on_1b"), (to_3rd, "on_2b"), (to_home, "on_3b")]:
+            ids = subset.loc[cond, col].dropna()
+            for rid, count in ids.value_counts().items():
+                runner_events[int(rid)][evt_type] += int(count)
+
+    total_sb = sum(v["sb"] for v in runner_events.values())
+    total_cs = sum(v["cs"] for v in runner_events.values())
+    total_pa = len(all_pa)
+    lg_wsb_per_pa = (total_sb * SB_RUN_VALUE + total_cs * CS_RUN_VALUE) / total_pa if total_pa else 0
+
+    print(f"    SB/CS: {total_sb:,} SB, {total_cs:,} CS across all batters")
+
+    # ── wGDP: GDP avoidance vs league rate ─────────────────────────
+    gdp_opp = all_pa["on_1b"].notna() & (all_pa["outs_when_up"] < 2)
+    is_gdp = all_pa["events"].isin(GDP_EVENTS)
+    lg_gdp_rate = is_gdp[gdp_opp].mean() if gdp_opp.any() else 0
+
+    print(f"    GDP: league rate = {lg_gdp_rate:.3f} in {gdp_opp.sum():,} opportunities")
+
+    # ── per-batter aggregation ─────────────────────────────────────
+    bsr_dict: dict[int, dict] = {}
+    pa_grouped = all_pa.groupby("batter")
+
+    for bid, group in pa_grouped:
+        bid = int(bid)
+        pa_count = len(group)
+
+        sb = runner_events[bid]["sb"]
+        cs = runner_events[bid]["cs"]
+        wsb = (sb * SB_RUN_VALUE + cs * CS_RUN_VALUE) - (lg_wsb_per_pa * pa_count)
+
+        opps = (group["on_1b"].notna() & (group["outs_when_up"] < 2)).sum()
+        gdps = group["events"].isin(GDP_EVENTS).sum()
+        if opps > 0:
+            player_gdp_rate = gdps / opps
+            wgdp = (lg_gdp_rate - player_gdp_rate) * opps * GDP_EXTRA_COST
+        else:
+            wgdp = 0.0
+
+        bsr_dict[bid] = {
+            "bsr": round(float(wsb + wgdp), 2),
+            "sb": int(sb),
+            "cs": int(cs),
+        }
+
+    return bsr_dict
+
+
+def build_player_json(all_pa: pd.DataFrame) -> tuple[list[dict], dict[str, int]]:
+    """Returns (player_list, name_to_id_map)."""
     batter_ids = all_pa["batter"].unique().tolist()
     print(f"  Looking up names for {len(batter_ids):,} unique batters …")
     name_df = pybaseball.playerid_reverse_lookup(batter_ids, key_type="mlbam")
@@ -141,12 +235,14 @@ def build_player_json(all_pa: pd.DataFrame) -> list[dict]:
             p["_last_date"] = row.game_date_str
             p["_team_for_last"] = team
 
-    for p in players.values():
+    name_to_id: dict[str, int] = {}
+    for bid, p in players.items():
         p["team"] = p.pop("_team_for_last", "")
         p.pop("_last_date", None)
         p["events"].sort(key=lambda e: (e[0], e[3]))
+        name_to_id[p["name"]] = bid
 
-    return list(players.values())
+    return list(players.values()), name_to_id
 
 
 def main():
@@ -167,6 +263,7 @@ def main():
     print(f"  MLB Plate Appearance Fetcher — {', '.join(map(str, years))}")
     print(f"{'='*60}\n")
 
+    raw_frames: list[pd.DataFrame] = []
     pa_frames: list[pd.DataFrame] = []
     for year in years:
         weights = get_weights(year)
@@ -174,6 +271,7 @@ def main():
         if df.empty:
             print(f"    No data for {year}, skipping.")
             continue
+        raw_frames.append(df)
         pa = df[df["events"].isin(PA_EVENTS)].copy()
         pa["run_value"] = pa["events"].apply(lambda e: run_value(e, weights))
         pa["game_date_str"] = pd.to_datetime(pa["game_date"]).dt.strftime("%Y-%m-%d")
@@ -184,11 +282,23 @@ def main():
         print("  No data returned for any year. Exiting.")
         sys.exit(1)
 
+    all_raw = pd.concat(raw_frames, ignore_index=True)
     all_pa = pd.concat(pa_frames, ignore_index=True)
     print(f"\n  Total: {len(all_pa):,} plate appearances across {len(pa_frames)} season(s)")
 
-    player_list = build_player_json(all_pa)
+    print(f"\n  Computing BsR (wSB + wGDP) …")
+    bsr_data = compute_bsr(all_raw, all_pa)
+    del all_raw
+
+    player_list, id_map = build_player_json(all_pa)
     print(f"  {len(player_list):,} unique players")
+
+    for p in player_list:
+        bid = id_map.get(p["name"])
+        b = bsr_data.get(bid, {})
+        p["bsr"] = b.get("bsr", 0.0)
+        p["sb"] = b.get("sb", 0)
+        p["cs"] = b.get("cs", 0)
 
     league_constants: dict[str, dict] = {}
     for year in years:
