@@ -148,6 +148,11 @@
   <div class="min-pa-wrap">
     Min PA: <input class="min-pa" id="minPA" type="number" value="60" min="1" step="1">
   </div>
+  <select class="mode-select" id="chartType">
+    <option value="scatter">Scatter</option>
+    <option value="bar">Stacked Bar</option>
+  </select>
+
   <div class="zoom-wrap">
     Chart:
     <button class="zoom-btn" id="zoomOut">−</button>
@@ -236,6 +241,7 @@ let paWindowKey = 'season';      // 'season' | 'month'
 let chartZoom = 1;               // 1x, 2x, 4x, 8x
 const ZOOM_STEPS = [1, 2, 4, 8];
 let groupBy = 'player';          // 'player' | 'team-asis' | 'team-aswas'
+let chartType = 'scatter';       // 'scatter' | 'bar'
 const expandedTeams = new Set();
 
 const PA_WINDOWS = {
@@ -359,6 +365,11 @@ function bindControls() {
     render();
   });
 
+  document.getElementById('chartType').addEventListener('change', e => {
+    chartType = e.target.value;
+    drawAllCharts();
+  });
+
   document.getElementById('zoomIn').addEventListener('click', () => {
     const idx = ZOOM_STEPS.indexOf(chartZoom);
     if (idx < ZOOM_STEPS.length - 1) { chartZoom = ZOOM_STEPS[idx + 1]; applyZoom(); }
@@ -400,4 +411,550 @@ function buildTeamRows(mode) {
     for (const p of DATA.players) {
       const abbr = p.team;
       if (!abbr) continue;
-      if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: 
+      if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [] });
+      const t = teams.get(abbr);
+      for (const e of p.events) t.events.push(e);
+    }
+  } else {
+    for (const p of DATA.players) {
+      for (const e of p.events) {
+        const abbr = e[4];
+        if (!abbr) continue;
+        if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [] });
+        teams.get(abbr).events.push(e);
+      }
+    }
+  }
+
+  for (const t of teams.values()) {
+    t.events.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
+  }
+
+  return [...teams.values()];
+}
+
+function getPlayersForTeam(teamAbbr) {
+  if (groupBy === 'team-asis') {
+    return DATA.players.filter(p => p.team === teamAbbr);
+  }
+  const result = [];
+  for (const p of DATA.players) {
+    const teamEvents = p.events.filter(e => e[4] === teamAbbr);
+    if (teamEvents.length > 0) {
+      result.push({ ...p, events: teamEvents });
+    }
+  }
+  return result;
+}
+
+function computeStats(events) {
+  let pa = 0, hits = 0, walks = 0, wobaN = 0, wobaD = 0;
+  let xwobaN = 0, xwobaD = 0;
+  for (const e of events) {
+    const [, evt, rv, , , xw] = e;
+    pa++;
+    if (HIT_EVENTS.has(evt)) hits++;
+    if (WALK_EVENTS.has(evt)) walks++;
+    wobaN += rv;
+    if (!WOBA_DENOM_EXCLUDE.has(evt)) {
+      wobaD++;
+      xwobaD++;
+      xwobaN += (xw != null) ? xw : rv;
+    }
+  }
+  const woba = wobaD > 0 ? wobaN / wobaD : 0;
+  const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
+  const wrc_plus = Math.round(((wraaPerPa + curLC.lgRPA) / curLC.lgRPA) * 100);
+  const xwoba = xwobaD > 0 ? xwobaN / xwobaD : 0;
+  return { pa, hits, walks, woba, wrc_plus, xwoba };
+}
+
+/* ================================================================
+   COMPRESSED X-AXIS (skip offseason gaps)
+   ================================================================ */
+function buildCompressedScale(allTimestamps) {
+  const sorted = [...new Set(allTimestamps)].sort((a, b) => a - b);
+  if (sorted.length < 2) return { scale: () => 0.5, ticks: sorted, breaks: [] };
+
+  const MS_PER_DAY = 86400000;
+  const MAX_GAP = 14;        // days — anything bigger gets compressed
+  const COMPRESSED_GAP = 5;  // visual days for an offseason gap
+
+  const positions = [0];
+  const breaks = [];  // x-positions of offseason breaks
+  for (let i = 1; i < sorted.length; i++) {
+    const gapDays = (sorted[i] - sorted[i - 1]) / MS_PER_DAY;
+    if (gapDays > MAX_GAP) {
+      positions.push(positions[i - 1] + COMPRESSED_GAP);
+      breaks.push(positions[i - 1] + COMPRESSED_GAP / 2);
+    } else {
+      positions.push(positions[i - 1] + gapDays);
+    }
+  }
+  const total = positions[positions.length - 1] || 1;
+
+  function scale(t) {
+    let lo = 0, hi = sorted.length - 1;
+    if (t <= sorted[0]) return 0;
+    if (t >= sorted[hi]) return 1;
+    while (lo < hi - 1) {
+      const mid = (lo + hi) >> 1;
+      if (sorted[mid] <= t) lo = mid; else hi = mid;
+    }
+    const frac = (t - sorted[lo]) / (sorted[hi] - sorted[lo] || 1);
+    return (positions[lo] + frac * (positions[hi] - positions[lo])) / total;
+  }
+
+  return { scale, ticks: sorted, breaks };
+}
+
+/* ================================================================
+   RENDER
+   ================================================================ */
+function render() {
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const minPA = Math.max(1, parseInt(document.getElementById('minPA').value, 10) || 1);
+  const isTeam = groupBy.startsWith('team');
+  const paCount = isTeam ? PA_WINDOWS[paWindowKey].team : PA_WINDOWS[paWindowKey].player;
+  const playerPaCount = PA_WINDOWS[paWindowKey].player;
+
+  const nameHeader = document.querySelector('#thead-row th[data-key="name"]');
+  nameHeader.childNodes[0].textContent = isTeam ? 'Team ' : 'Player ';
+
+  const source = isTeam ? buildTeamRows(groupBy) : DATA.players;
+
+  const rows = [];
+  const allTimestamps = [];
+  for (const p of source) {
+    const { display, stats } = getEventsForEntity(p, paCount);
+    if (display.length === 0) continue;
+    const s = computeStats(stats);
+    if (s.pa < minPA) continue;
+    if (q && !p.name.toLowerCase().includes(q)) continue;
+    rows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats, _paCount: paCount });
+    for (const [d] of display) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
+  }
+
+  compressedX = buildCompressedScale(allTimestamps);
+
+  const dir = sort.dir === 'desc' ? -1 : 1;
+  if (sort.key === 'name') {
+    rows.sort((a, b) => dir * a.name.localeCompare(b.name));
+  } else {
+    rows.sort((a, b) => dir * (a[sort.key] - b[sort.key]));
+  }
+
+  document.querySelectorAll('#thead-row th[data-key]').forEach(th => {
+    const active = th.dataset.key === sort.key;
+    th.classList.toggle('active', active);
+    th.querySelector('.arrow').textContent = active ? (sort.dir === 'desc' ? '▼' : '▲') : '';
+  });
+
+  const entityLabel = isTeam ? 'teams' : 'players';
+  document.getElementById('count').textContent = `${rows.length} ${entityLabel}`;
+
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  canvasMap.clear();
+  pointsMap.clear();
+  lineMap.clear();
+  xLineMap.clear();
+
+  const frag = document.createDocumentFragment();
+  rows.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    if (isTeam) {
+      const expanded = expandedTeams.has(r.team);
+      tr.classList.add('team-row');
+      tr.innerHTML = `
+        <td class="col-rank">${i + 1}</td>
+        <td class="col-name" title="${r.name}"><span class="expand-arrow${expanded ? ' open' : ''}">▶</span> ${r.name}</td>
+        <td class="col-team"></td>
+        <td class="col-num">${r.wrc_plus}</td>
+        <td class="col-num">${r.xwoba.toFixed(3)}</td>
+        <td class="col-num">${r.pa}</td>
+        <td class="col-num">${r.hits}</td>
+        <td class="col-num">${r.walks}</td>
+        <td class="col-chart"><canvas></canvas></td>`;
+      tr.addEventListener('click', () => {
+        if (expandedTeams.has(r.team)) expandedTeams.delete(r.team);
+        else expandedTeams.add(r.team);
+        render();
+      });
+      frag.appendChild(tr);
+      canvasMap.set(tr.querySelector('canvas'), r);
+
+      if (expanded) {
+        const players = getPlayersForTeam(r.team);
+        const playerRows = [];
+        for (const p of players) {
+          const { display, stats } = getEventsForEntity(p, playerPaCount);
+          if (display.length === 0) continue;
+          const s = computeStats(stats);
+          playerRows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats, _paCount: playerPaCount });
+        }
+        playerRows.sort((a, b) => b.wrc_plus - a.wrc_plus);
+        for (const pr of playerRows) {
+          const subTr = document.createElement('tr');
+          subTr.classList.add('player-subrow');
+          subTr.innerHTML = `
+            <td class="col-rank"></td>
+            <td class="col-name" title="${pr.name}">${pr.name}</td>
+            <td class="col-team">${pr.team || ''}</td>
+            <td class="col-num">${pr.wrc_plus}</td>
+            <td class="col-num">${pr.xwoba.toFixed(3)}</td>
+            <td class="col-num">${pr.pa}</td>
+            <td class="col-num">${pr.hits}</td>
+            <td class="col-num">${pr.walks}</td>
+            <td class="col-chart"><canvas></canvas></td>`;
+          frag.appendChild(subTr);
+          canvasMap.set(subTr.querySelector('canvas'), pr);
+        }
+      }
+    } else {
+      tr.innerHTML = `
+        <td class="col-rank">${i + 1}</td>
+        <td class="col-name" title="${r.name}">${r.name}</td>
+        <td class="col-team">${r.team}</td>
+        <td class="col-num">${r.wrc_plus}</td>
+        <td class="col-num">${r.xwoba.toFixed(3)}</td>
+        <td class="col-num">${r.pa}</td>
+        <td class="col-num">${r.hits}</td>
+        <td class="col-num">${r.walks}</td>
+        <td class="col-chart"><canvas></canvas></td>`;
+      frag.appendChild(tr);
+      canvasMap.set(tr.querySelector('canvas'), r);
+    }
+  });
+  tbody.appendChild(frag);
+
+  requestAnimationFrame(() => applyZoom());
+}
+
+/* ================================================================
+   ZOOM
+   ================================================================ */
+function applyZoom() {
+  document.getElementById('zoomLabel').textContent = chartZoom + 'x';
+  const chartTh = document.querySelector('th.col-chart');
+  const chartTds = document.querySelectorAll('td.col-chart');
+  if (chartZoom === 1) {
+    chartTh.style.minWidth = '';
+    chartTds.forEach(td => { td.style.minWidth = ''; td.querySelector('canvas').style.width = '100%'; });
+  } else {
+    // Measure one cell's natural 1x width
+    chartTh.style.minWidth = '';
+    chartTds.forEach(td => { td.style.minWidth = ''; td.querySelector('canvas').style.width = '100%'; });
+    const base = (chartTds[0]?.clientWidth || 600) - 20;
+    const zoomedW = base * chartZoom;
+    const zoomedColW = (zoomedW + 20) + 'px';
+    chartTh.style.minWidth = zoomedColW;
+    chartTds.forEach(td => {
+      td.style.minWidth = zoomedColW;
+      td.querySelector('canvas').style.width = zoomedW + 'px';
+    });
+  }
+  drawAllCharts();
+}
+
+/* ================================================================
+   CANVAS SCATTER CHARTS
+   ================================================================ */
+function drawAllCharts() {
+  canvasMap.forEach((row, canvas) => {
+    const td = canvas.parentElement;
+    const cssW = td.clientWidth - 20;
+    const cssH = 90;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width  = cssW * dpr;
+    canvas.height = cssH * dpr;
+    canvas.style.width  = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    drawChart(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH, row._paCount);
+  });
+}
+
+const BAR_STACK_ORDER = [
+  'strikeout','strikeout_double_play','field_out','force_out',
+  'grounded_into_double_play','double_play','triple_play',
+  'fielders_choice','fielders_choice_out','field_error',
+  'sac_fly','sac_bunt','sac_fly_double_play','sac_bunt_double_play',
+  'catcher_interf','other_out',
+  'walk','intent_walk','hit_by_pitch',
+  'single','double','triple','home_run',
+];
+
+function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
+  const pad = { top: 4, right: 30, bottom: 12, left: 6 };
+  const pw = w - pad.left - pad.right;
+  const ph = h - pad.top - pad.bottom;
+
+  const xScale = t => pad.left + (1 - compressedX.scale(t)) * pw;
+  const yScale = v => pad.top + ph - (v / Y_MAX) * ph;
+  const yScaleWrc = v => {
+    const clamped = Math.max(WRC_PLUS_MIN, Math.min(WRC_PLUS_MAX, v));
+    return pad.top + ph - ((clamped - WRC_PLUS_MIN) / (WRC_PLUS_MAX - WRC_PLUS_MIN)) * ph;
+  };
+
+  const MS_PER_DAY = 86400000;
+  const sampleT = compressedX.ticks.length > 1 ? compressedX.ticks[0] : Date.now();
+  const dayWidthPx = Math.abs(xScale(sampleT + MS_PER_DAY) - xScale(sampleT));
+
+  // ── shared gridlines / labels ──────────────────────────────
+  ctx.strokeStyle = '#f0f0f0'; ctx.lineWidth = 0.5;
+  for (const g of [0.691, 0.882, 1.252, 1.584]) {
+    const gy = yScale(g);
+    ctx.beginPath(); ctx.moveTo(pad.left, gy); ctx.lineTo(w - pad.right, gy); ctx.stroke();
+  }
+
+  ctx.strokeStyle = '#c7c7cc'; ctx.lineWidth = 0.5; ctx.setLineDash([3, 3]);
+  const y100 = yScaleWrc(100);
+  ctx.beginPath(); ctx.moveTo(pad.left, y100); ctx.lineTo(w - pad.right, y100); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#9ca3af'; ctx.font = '8px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('100', w - pad.right + 3, y100 + 3);
+
+  ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 0.7;
+  const baseY = yScale(0);
+  ctx.beginPath(); ctx.moveTo(pad.left, baseY); ctx.lineTo(w - pad.right, baseY); ctx.stroke();
+
+  ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 0.5; ctx.setLineDash([2, 2]);
+  for (const bx of compressedX.breaks) {
+    const xPos = pad.left + (bx / (compressedX.ticks.length > 1 ?
+      compressedX.scale(compressedX.ticks[compressedX.ticks.length - 1]) * pw / pw : 1)) * pw;
+  }
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = '#b0b0b0'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  if (compressedX.ticks.length > 0) {
+    const dStart = new Date(compressedX.ticks[0]);
+    const dEnd = new Date(compressedX.ticks[compressedX.ticks.length - 1]);
+    const multiYear = dEnd.getFullYear() - dStart.getFullYear() >= 1;
+    const labeledMonths = new Set();
+    let cur = new Date(dStart.getFullYear(), dStart.getMonth(), 15);
+    while (cur <= dEnd) {
+      const t = cur.getTime();
+      const key = cur.getFullYear() * 100 + cur.getMonth();
+      if (!labeledMonths.has(key) && t >= compressedX.ticks[0] && t <= compressedX.ticks[compressedX.ticks.length - 1]) {
+        const label = multiYear
+          ? months[cur.getMonth()] + ' ' + String(cur.getFullYear()).slice(2)
+          : months[cur.getMonth()];
+        const xPos = xScale(t);
+        if (xPos > pad.left + 10 && xPos < w - pad.right - 10) {
+          ctx.fillText(label, xPos, h - 1);
+        }
+        labeledMonths.add(key);
+      }
+      cur.setMonth(cur.getMonth() + 1);
+    }
+  }
+
+  // ── group events by date ───────────────────────────────────
+  const byDate = new Map();
+  for (const e of displayEvents) {
+    const d = e[0];
+    if (!byDate.has(d)) byDate.set(d, []);
+    byDate.get(d).push(e);
+  }
+  for (const group of byDate.values()) group.sort((a, b) => a[3] - b[3]);
+
+  // ── render events (scatter or stacked bar) ─────────────────
+  const pts = [];
+  if (chartType === 'bar') {
+    const barW = Math.max(1, Math.min(dayWidthPx * 0.7, 8));
+    const OUT_MIN_H = 1;
+    for (const [dateStr, group] of byDate) {
+      const t = new Date(dateStr + 'T12:00:00').getTime();
+      const cx = xScale(t);
+      const sorted = [...group].sort((a, b) => {
+        const ai = BAR_STACK_ORDER.indexOf(a[1]);
+        const bi = BAR_STACK_ORDER.indexOf(b[1]);
+        return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi);
+      });
+      let curY = baseY;
+      for (const e of sorted) {
+        const [, evt, rv] = e;
+        const isOut = !EVENT_COLORS[evt];
+        const segH = rv > 0 ? (rv / Y_MAX) * ph : OUT_MIN_H;
+        const segTop = curY - segH;
+        ctx.globalAlpha = isOut ? 0.55 : 0.85;
+        ctx.fillStyle = EVENT_COLORS[evt] || OUT_COLOR;
+        ctx.fillRect(cx - barW / 2, segTop, barW, segH);
+        pts.push({ x: cx, y: segTop + segH / 2, r: barW / 2 + 3, evt, date: dateStr, rv });
+        curY = segTop;
+      }
+    }
+    ctx.globalAlpha = 1;
+  } else {
+    const drawList = [];
+    for (const [, group] of byDate) {
+      const n = group.length;
+      const spread = Math.min(dayWidthPx * 0.8, n * 3);
+      group.forEach((e, i) => {
+        const frac = n > 1 ? (i / (n - 1)) - 0.5 : 0;
+        drawList.push({ e, xOff: frac * spread });
+      });
+    }
+    drawList.sort((a, b) => a.e[2] - b.e[2]);
+    for (const { e, xOff } of drawList) {
+      const [dateStr, evt, rv] = e;
+      const t = new Date(dateStr + 'T12:00:00').getTime();
+      const x = xScale(t) + xOff;
+      const y = yScale(rv);
+      const isOut = !EVENT_COLORS[evt];
+      ctx.globalAlpha = isOut ? 0.45 : 0.8;
+      ctx.fillStyle = EVENT_COLORS[evt] || OUT_COLOR;
+      ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI * 2); ctx.fill();
+      pts.push({ x, y, r: 5, evt, date: dateStr, rv });
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Running wRC+ and xwOBA lines ─────────────────────────────
+  const useRolling = viewMode === 'pa';
+  const lineSource = useRolling ? displayEvents : statEvents;
+  const chronological = [...lineSource].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
+
+  let wobaNumer = 0, wobaDenom = 0;
+  let xwobaNumer = 0, xwobaDenom = 0;
+  const win = [];
+  const linePoints = [];
+  const xLinePoints = [];
+
+  for (const e of chronological) {
+    const [dateStr, evt, rv, , , xw] = e;
+    const inDenom = !WOBA_DENOM_EXCLUDE.has(evt);
+    const xVal = (xw != null && inDenom) ? xw : (inDenom ? rv : 0);
+    win.push({ rv, inDenom, xVal });
+    wobaNumer += rv;
+    xwobaNumer += xVal;
+    if (inDenom) { wobaDenom++; xwobaDenom++; }
+
+    if (useRolling) {
+      while (win.length > paCount) {
+        const old = win.shift();
+        wobaNumer -= old.rv;
+        xwobaNumer -= old.xVal;
+        if (old.inDenom) { wobaDenom--; xwobaDenom--; }
+      }
+    }
+
+    const minPA = useRolling ? Math.min(paCount, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA;
+    if (win.length >= minPA && wobaDenom > 0) {
+      const t = new Date(dateStr + 'T12:00:00').getTime();
+      const x = xScale(t);
+
+      const woba = wobaNumer / wobaDenom;
+      const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
+      const wrcPlus = ((wraaPerPa + curLC.lgRPA) / curLC.lgRPA) * 100;
+      linePoints.push({ x, y: yScaleWrc(wrcPlus), wrcPlus, paNum: win.length, date: dateStr });
+
+      const xw2 = xwobaNumer / xwobaDenom;
+      const xWraa = (xw2 - curLC.lgwOBA) / curLC.wOBAScale;
+      const xWrcPlus = ((xWraa + curLC.lgRPA) / curLC.lgRPA) * 100;
+      xLinePoints.push({ x, y: yScaleWrc(xWrcPlus), xwoba: xw2, xWrcPlus, paNum: win.length, date: dateStr });
+    }
+  }
+
+  if (linePoints.length > 1) {
+    ctx.beginPath();
+    ctx.moveTo(linePoints[0].x, linePoints[0].y);
+    for (let i = 1; i < linePoints.length; i++) ctx.lineTo(linePoints[i].x, linePoints[i].y);
+    ctx.strokeStyle = WRC_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.7;
+    ctx.stroke(); ctx.globalAlpha = 1;
+  }
+  if (xLinePoints.length > 1) {
+    ctx.beginPath();
+    ctx.moveTo(xLinePoints[0].x, xLinePoints[0].y);
+    for (let i = 1; i < xLinePoints.length; i++) ctx.lineTo(xLinePoints[i].x, xLinePoints[i].y);
+    ctx.strokeStyle = XWOBA_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.7;
+    ctx.setLineDash([4, 3]);
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+
+  pointsMap.set(canvas, pts);
+  lineMap.set(canvas, linePoints);
+  xLineMap.set(canvas, xLinePoints);
+}
+
+/* ================================================================
+   TOOLTIP
+   ================================================================ */
+const tooltip = document.getElementById('tooltip');
+const PRETTY = {
+  home_run: 'Home Run', triple: 'Triple', double: 'Double', single: 'Single',
+  walk: 'Walk', intent_walk: 'Int. Walk', hit_by_pitch: 'HBP',
+  strikeout: 'Strikeout', strikeout_double_play: 'Strikeout (DP)',
+  field_out: 'Field Out', force_out: 'Force Out',
+  grounded_into_double_play: 'GIDP', double_play: 'Double Play',
+  triple_play: 'Triple Play', fielders_choice: "Fielder's Choice",
+  fielders_choice_out: "FC Out", field_error: 'Error',
+  sac_fly: 'Sac Fly', sac_bunt: 'Sac Bunt',
+  sac_fly_double_play: 'Sac Fly (DP)', sac_bunt_double_play: 'Sac Bunt (DP)',
+  catcher_interf: "Catcher's Int.", other_out: 'Out',
+};
+
+document.addEventListener('mousemove', e => {
+  const canvas = e.target.closest?.('canvas');
+  if (!canvas || !pointsMap.has(canvas)) { tooltip.style.opacity = 0; return; }
+
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  const pts = pointsMap.get(canvas);
+  let best = null, bestDist = 12;
+  for (const p of pts) {
+    const d = Math.hypot(mx - p.x, my - p.y);
+    if (d < bestDist) { bestDist = d; best = p; }
+  }
+
+  const allLines = [
+    ...(lineMap.get(canvas) || []).map(lp => ({ ...lp, type: 'wrc' })),
+    ...(xLineMap.get(canvas) || []).map(lp => ({ ...lp, type: 'xwoba' })),
+  ];
+  let bestLine = null, bestLineDist = 8;
+  for (const lp of allLines) {
+    const dx = Math.abs(mx - lp.x);
+    const dy = Math.abs(my - lp.y);
+    if (dx < 6 && dy < 14) {
+      const d = Math.hypot(dx, dy * 0.4);
+      if (d < bestLineDist) { bestLineDist = d; bestLine = lp; }
+    }
+  }
+
+  if (best && bestDist <= (bestLine ? bestLineDist : 12)) {
+    tooltip.style.opacity = 1;
+    tooltip.style.left = (e.clientX + 14) + 'px';
+    tooltip.style.top  = (e.clientY - 10) + 'px';
+    tooltip.innerHTML = `<strong>${PRETTY[best.evt] || best.evt}</strong><br>` +
+      `${best.date} · Run value ${best.rv.toFixed(3)}`;
+  } else if (bestLine) {
+    tooltip.style.opacity = 1;
+    tooltip.style.left = (e.clientX + 14) + 'px';
+    tooltip.style.top  = (e.clientY - 10) + 'px';
+    const windowLabel = viewMode === 'pa' ? ` (last ${bestLine.paNum} PA)` : ` · After ${bestLine.paNum} PA`;
+    if (bestLine.type === 'xwoba') {
+      tooltip.innerHTML = `<strong>xwOBA ${bestLine.xwoba.toFixed(3)}</strong> (xwRC+ ${Math.round(bestLine.xWrcPlus)})<br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else {
+      tooltip.innerHTML = `<strong>wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    }
+  } else {
+    tooltip.style.opacity = 0;
+  }
+});
+
+/* ── Resize handler ──────────────────────────────────────────── */
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (DATA) render(); }, 150);
+});
+</script>
+</body>
+</html>

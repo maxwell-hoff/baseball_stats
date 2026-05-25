@@ -200,4 +200,18 @@ def main():
         "last_updated": datetime.now().isoformat(timespec="seconds"),
         "years_available": years,
         "league_constants": league_constants,
-    
+        "players": player_list,
+    }
+
+    os.makedirs("data", exist_ok=True)
+    path = os.path.join("data", "player_data.json")
+    with open(path, "w") as f:
+        json.dump(output, f)
+
+    size_mb = os.path.getsize(path) / (1024 * 1024)
+    print(f"\n  Wrote {path} ({size_mb:.1f} MB)")
+    print(f"  To view: python -m http.server 8000  →  http://localhost:8000\n")
+
+
+if __name__ == "__main__":
+    main()
