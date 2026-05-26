@@ -245,6 +245,62 @@ def build_player_json(all_pa: pd.DataFrame) -> tuple[list[dict], dict[str, int]]
     return list(players.values()), name_to_id
 
 
+def build_pitcher_json(all_pa: pd.DataFrame) -> list[dict]:
+    """Build pitcher records — same event format as batters, grouped by pitcher."""
+    pitcher_ids = all_pa["pitcher"].dropna().unique().astype(int).tolist()
+    print(f"  Looking up names for {len(pitcher_ids):,} unique pitchers …")
+    name_df = pybaseball.playerid_reverse_lookup(pitcher_ids, key_type="mlbam")
+    pitcher_names: dict[int, str] = {}
+    for _, row in name_df.iterrows():
+        first = str(row["name_first"]).strip().title()
+        last = str(row["name_last"]).strip().title()
+        pitcher_names[int(row["key_mlbam"])] = f"{first} {last}"
+
+    pitchers: dict[int, dict] = {}
+    for row in all_pa.itertuples(index=False):
+        pid = int(row.pitcher) if pd.notna(row.pitcher) else None
+        if pid is None:
+            continue
+        if pid not in pitchers:
+            pitchers[pid] = {
+                "name": pitcher_names.get(pid, f"Unknown ({pid})"),
+                "team": "",
+                "playerType": "pitcher",
+                "events": [],
+                "_last_date": "",
+                "_team_for_last": "",
+            }
+
+        p = pitchers[pid]
+        team = row.home_team if row.inning_topbot == "Top" else row.away_team
+        xw = row.estimated_woba_using_speedangle
+        stand = row.stand if hasattr(row, "stand") and pd.notna(row.stand) else None
+        p["events"].append([
+            row.game_date_str,
+            row.events,
+            round(row.run_value, 3),
+            int(row.at_bat_number),
+            team,
+            round(xw, 3) if pd.notna(xw) else None,
+            row.home_team,
+            stand,
+        ])
+
+        if row.game_date_str >= p["_last_date"]:
+            p["_last_date"] = row.game_date_str
+            p["_team_for_last"] = team
+
+    for pid, p in pitchers.items():
+        p["team"] = p.pop("_team_for_last", "")
+        p.pop("_last_date", None)
+        p["events"].sort(key=lambda e: (e[0], e[3]))
+        p["bsr"] = 0.0
+        p["sb"] = 0
+        p["cs"] = 0
+
+    return list(pitchers.values())
+
+
 def main():
     parser = argparse.ArgumentParser(description="Fetch MLB PA data → JSON")
     parser.add_argument(
@@ -291,7 +347,7 @@ def main():
     del all_raw
 
     player_list, id_map = build_player_json(all_pa)
-    print(f"  {len(player_list):,} unique players")
+    print(f"  {len(player_list):,} unique batters")
 
     for p in player_list:
         bid = id_map.get(p["name"])
@@ -299,6 +355,13 @@ def main():
         p["bsr"] = b.get("bsr", 0.0)
         p["sb"] = b.get("sb", 0)
         p["cs"] = b.get("cs", 0)
+        p["playerType"] = "batter"
+
+    print(f"\n  Building pitcher records …")
+    pitcher_list = build_pitcher_json(all_pa)
+    print(f"  {len(pitcher_list):,} unique pitchers")
+
+    all_players = player_list + pitcher_list
 
     league_constants: dict[str, dict] = {}
     for year in years:
@@ -313,7 +376,7 @@ def main():
         "last_updated": datetime.now().isoformat(timespec="seconds"),
         "years_available": years,
         "league_constants": league_constants,
-        "players": player_list,
+        "players": all_players,
     }
 
     os.makedirs("data", exist_ok=True)

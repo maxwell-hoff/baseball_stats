@@ -144,6 +144,12 @@
     <option value="rolling-month">Rolling Average – Month (~1,000 PA/team, ~60 PA/player)</option>
   </select>
 
+  <select class="mode-select" id="playerType">
+    <option value="batter" selected>Batters</option>
+    <option value="pitcher">Pitchers</option>
+    <option value="all">All Players</option>
+  </select>
+
   <div class="year-btns" id="yearBtns"></div>
 
   <div class="min-pa-wrap">
@@ -244,6 +250,7 @@ let chartZoom = 1;               // 1x, 2x, 4x, 8x
 const ZOOM_STEPS = [1, 2, 4, 8];
 let groupBy = 'team-asis';       // 'player' | 'team-asis' | 'team-aswas'
 let chartType = 'bar';           // 'scatter' | 'bar'
+let playerTypeFilter = 'batter'; // 'batter' | 'pitcher' | 'all'
 const expandedTeams = new Set();
 
 const PA_WINDOWS = {
@@ -349,12 +356,14 @@ function buildYearButtons(years) {
    LEGEND
    ================================================================ */
 function buildLegend() {
+  const wrcLabel = playerTypeFilter === 'pitcher' ? 'oWRC+' : 'wRC+';
   const el = document.getElementById('legend');
   el.innerHTML = LEGEND_ITEMS.map(([label, color]) => {
+    const displayLabel = label === 'wRC+' ? wrcLabel : label;
     if (label === 'wRC+') {
-      return `<div class="legend-item"><span style="width:16px;height:2px;background:${color};border-radius:1px"></span>${label}</div>`;
+      return `<div class="legend-item"><span style="width:16px;height:2px;background:${color};border-radius:1px"></span>${displayLabel}</div>`;
     }
-    return `<div class="legend-item"><span class="dot" style="background:${color}"></span>${label}</div>`;
+    return `<div class="legend-item"><span class="dot" style="background:${color}"></span>${displayLabel}</div>`;
   }).join('');
 }
 
@@ -370,6 +379,11 @@ function bindControls() {
     document.getElementById('search').placeholder =
       groupBy.startsWith('team') ? 'Search team…' : 'Search player…';
     expandedTeams.clear();
+    render();
+  });
+
+  document.getElementById('playerType').addEventListener('change', e => {
+    playerTypeFilter = e.target.value;
     render();
   });
 
@@ -421,10 +435,12 @@ function getEventsForEntity(entity, paCount) {
 }
 
 function buildTeamRows(mode) {
+  const effectiveType = playerTypeFilter === 'all' ? 'batter' : playerTypeFilter;
+  const typedPlayers = DATA.players.filter(p => (p.playerType || 'batter') === effectiveType);
   const teams = new Map();
 
   if (mode === 'team-asis') {
-    for (const p of DATA.players) {
+    for (const p of typedPlayers) {
       const abbr = p.team;
       if (!abbr) continue;
       if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [], bsr: 0, sb: 0, cs: 0 });
@@ -436,7 +452,7 @@ function buildTeamRows(mode) {
     }
   } else {
     const playerTeamBsr = new Map();
-    for (const p of DATA.players) {
+    for (const p of typedPlayers) {
       for (const e of p.events) {
         const abbr = e[4];
         if (!abbr) continue;
@@ -459,17 +475,20 @@ function buildTeamRows(mode) {
   for (const t of teams.values()) {
     t.events.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
     t.bsr = Math.round(t.bsr * 10) / 10;
+    t.playerType = effectiveType;
   }
 
   return [...teams.values()];
 }
 
 function getPlayersForTeam(teamAbbr) {
+  const effectiveType = playerTypeFilter === 'all' ? 'batter' : playerTypeFilter;
+  const typedPlayers = DATA.players.filter(p => (p.playerType || 'batter') === effectiveType);
   if (groupBy === 'team-asis') {
-    return DATA.players.filter(p => p.team === teamAbbr);
+    return typedPlayers.filter(p => p.team === teamAbbr);
   }
   const result = [];
-  for (const p of DATA.players) {
+  for (const p of typedPlayers) {
     const teamEvents = p.events.filter(e => e[4] === teamAbbr);
     if (teamEvents.length > 0) {
       result.push({ ...p, events: teamEvents });
@@ -478,7 +497,7 @@ function getPlayersForTeam(teamAbbr) {
   return result;
 }
 
-function computeStats(events) {
+function computeStats(events, isPitcher) {
   let pa = 0, hits = 0, walks = 0, wobaN = 0, wobaD = 0;
   let xwobaN = 0, xwobaD = 0;
   let pfSum = 0, pfCount = 0;
@@ -499,9 +518,10 @@ function computeStats(events) {
   const woba = wobaD > 0 ? wobaN / wobaD : 0;
   const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
   const meanPF = pfCount > 0 ? pfSum / pfCount : 1.0;
-  const wrc_plus = Math.round(
+  let wrc_plus = Math.round(
     ((wraaPerPa + curLC.lgRPA + (curLC.lgRPA - meanPF * curLC.lgRPA)) / curLC.lgRPA) * 100
   );
+  if (isPitcher) wrc_plus = 200 - wrc_plus;
   const xwoba = xwobaD > 0 ? xwobaN / xwobaD : 0;
   return { pa, hits, walks, woba, wrc_plus, xwoba };
 }
@@ -568,7 +588,18 @@ function render() {
   const nameHeader = document.querySelector('#thead-row th[data-key="name"]');
   nameHeader.childNodes[0].textContent = isTeam ? 'Team ' : 'Player ';
 
-  const source = isTeam ? buildTeamRows(groupBy) : DATA.players;
+  const wrcHeader = document.querySelector('#thead-row th[data-key="wrc_plus"]');
+  wrcHeader.childNodes[0].textContent = playerTypeFilter === 'pitcher' ? 'oWRC+ ' : 'wRC+ ';
+
+  document.getElementById('search').placeholder = isTeam ? 'Search team…' :
+    playerTypeFilter === 'pitcher' ? 'Search pitcher…' : 'Search player…';
+
+  buildLegend();
+
+  const filteredPlayers = playerTypeFilter === 'all'
+    ? DATA.players
+    : DATA.players.filter(p => (p.playerType || 'batter') === playerTypeFilter);
+  const source = isTeam ? buildTeamRows(groupBy) : filteredPlayers;
 
   const currentYear = DATA.years_available[DATA.years_available.length - 1];
 
@@ -577,7 +608,8 @@ function render() {
   for (const p of source) {
     const { display, stats } = getEventsForEntity(p, paCount);
     if (display.length === 0) continue;
-    const s = computeStats(stats);
+    const isPitcher = (p.playerType || 'batter') === 'pitcher';
+    const s = computeStats(stats, isPitcher);
     if (viewMode === 'pa') {
       const curSeasonPA = display.filter(e => parseInt(e[0].substring(0, 4)) === currentYear).length;
       if (curSeasonPA < minPA) continue;
@@ -585,7 +617,7 @@ function render() {
       if (s.pa < minPA) continue;
     }
     if (q && !p.name.toLowerCase().includes(q)) continue;
-    rows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats, _paCount: paCount });
+    rows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats, _paCount: paCount, isPitcher });
     for (const [d] of display) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
   }
 
@@ -619,7 +651,9 @@ function render() {
     th.querySelector('.arrow').textContent = active ? (sort.dir === 'desc' ? '▼' : '▲') : '';
   });
 
-  const entityLabel = isTeam ? 'teams' : 'players';
+  const entityLabel = isTeam ? 'teams' :
+    playerTypeFilter === 'pitcher' ? 'pitchers' :
+    playerTypeFilter === 'batter' ? 'batters' : 'players';
   document.getElementById('count').textContent = `${rows.length} ${entityLabel}`;
 
   const tbody = document.getElementById('tbody');
@@ -644,7 +678,7 @@ function render() {
         <td class="col-num">${r.pa}</td>
         <td class="col-num">${r.hits}</td>
         <td class="col-num">${r.walks}</td>
-        <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
+        <td class="col-num">${r.isPitcher ? '–' : (r.bsr ?? 0).toFixed(1)}</td>
         <td class="col-chart"><canvas></canvas></td>`;
       tr.addEventListener('click', () => {
         if (expandedTeams.has(r.team)) expandedTeams.delete(r.team);
@@ -660,8 +694,9 @@ function render() {
         for (const p of players) {
           const { display, stats } = getEventsForEntity(p, playerPaCount);
           if (display.length === 0) continue;
-          const s = computeStats(stats);
-          playerRows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats, _paCount: playerPaCount });
+          const isPitcher = (p.playerType || 'batter') === 'pitcher';
+          const s = computeStats(stats, isPitcher);
+          playerRows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats, _paCount: playerPaCount, isPitcher });
         }
         playerRows.sort((a, b) => b.wrc_plus - a.wrc_plus);
         for (const pr of playerRows) {
@@ -676,23 +711,26 @@ function render() {
             <td class="col-num">${pr.pa}</td>
             <td class="col-num">${pr.hits}</td>
             <td class="col-num">${pr.walks}</td>
-            <td class="col-num">${(pr.bsr ?? 0).toFixed(1)}</td>
+            <td class="col-num">${pr.isPitcher ? '–' : (pr.bsr ?? 0).toFixed(1)}</td>
             <td class="col-chart"><canvas></canvas></td>`;
           frag.appendChild(subTr);
           canvasMap.set(subTr.querySelector('canvas'), pr);
         }
       }
     } else {
+      const badge = playerTypeFilter === 'all'
+        ? `<span style="display:inline-block;font-size:9px;font-weight:600;color:#fff;background:${r.isPitcher ? '#e11d48' : '#2563eb'};border-radius:3px;padding:1px 4px;margin-right:4px;vertical-align:1px">${r.isPitcher ? 'P' : 'B'}</span>`
+        : '';
       tr.innerHTML = `
         <td class="col-rank">${i + 1}</td>
-        <td class="col-name" title="${r.name}">${r.name}</td>
+        <td class="col-name" title="${r.name}">${badge}${r.name}</td>
         <td class="col-team">${r.team}</td>
         <td class="col-num">${r.wrc_plus}</td>
         <td class="col-num">${r.xwoba.toFixed(3)}</td>
         <td class="col-num">${r.pa}</td>
         <td class="col-num">${r.hits}</td>
         <td class="col-num">${r.walks}</td>
-        <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
+        <td class="col-num">${r.isPitcher ? '–' : (r.bsr ?? 0).toFixed(1)}</td>
         <td class="col-chart"><canvas></canvas></td>`;
       frag.appendChild(tr);
       canvasMap.set(tr.querySelector('canvas'), r);
@@ -744,7 +782,7 @@ function drawAllCharts() {
     canvas.style.height = cssH + 'px';
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    drawChart(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH, row._paCount);
+    drawChart(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH, row._paCount, row.isPitcher);
   });
 }
 
@@ -758,7 +796,7 @@ const BAR_STACK_ORDER = [
   'single','double','triple','home_run',
 ];
 
-function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
+function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitcher) {
   const pad = { top: 4, right: 30, bottom: 12, left: 6 };
   const pw = w - pad.left - pad.right;
   const ph = h - pad.top - pad.bottom;
@@ -939,12 +977,14 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
       const meanPF = pfCount > 0 ? pfSum / pfCount : 1.0;
       const woba = wobaNumer / wobaDenom;
       const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
-      const wrcPlus = ((wraaPerPa + curLC.lgRPA + (curLC.lgRPA - meanPF * curLC.lgRPA)) / curLC.lgRPA) * 100;
+      let wrcPlus = ((wraaPerPa + curLC.lgRPA + (curLC.lgRPA - meanPF * curLC.lgRPA)) / curLC.lgRPA) * 100;
+      if (isPitcher) wrcPlus = 200 - wrcPlus;
       linePoints.push({ x, y: yScaleWrc(wrcPlus), wrcPlus, paNum: win.length, date: dateStr });
 
       const xw2 = xwobaNumer / xwobaDenom;
       const xWraa = (xw2 - curLC.lgwOBA) / curLC.wOBAScale;
-      const xWrcPlus = ((xWraa + curLC.lgRPA) / curLC.lgRPA) * 100;
+      let xWrcPlus = ((xWraa + curLC.lgRPA) / curLC.lgRPA) * 100;
+      if (isPitcher) xWrcPlus = 200 - xWrcPlus;
       xLinePoints.push({ x, y: yScaleWrc(xWrcPlus), xwoba: xw2, xWrcPlus, paNum: win.length, date: dateStr });
     }
   }
@@ -991,6 +1031,9 @@ document.addEventListener('mousemove', e => {
   const canvas = e.target.closest?.('canvas');
   if (!canvas || !pointsMap.has(canvas)) { tooltip.style.opacity = 0; return; }
 
+  const rowData = canvasMap.get(canvas);
+  const isPitcherRow = rowData?.isPitcher;
+
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
@@ -1028,10 +1071,12 @@ document.addEventListener('mousemove', e => {
     tooltip.style.top  = (e.clientY - 10) + 'px';
     const windowLabel = viewMode === 'pa' ? ` (last ${bestLine.paNum} PA)` : ` · After ${bestLine.paNum} PA`;
     if (bestLine.type === 'xwoba') {
-      tooltip.innerHTML = `<strong>xwOBA ${bestLine.xwoba.toFixed(3)}</strong> (xwRC+ ${Math.round(bestLine.xWrcPlus)})<br>` +
+      const xLabel = isPitcherRow ? 'oWRC+' : 'xwRC+';
+      tooltip.innerHTML = `<strong>xwOBA ${bestLine.xwoba.toFixed(3)}</strong> (${xLabel} ${Math.round(bestLine.xWrcPlus)})<br>` +
         `${bestLine.date}${windowLabel}`;
     } else {
-      tooltip.innerHTML = `<strong>wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+      const wLabel = isPitcherRow ? 'oWRC+' : 'wRC+';
+      tooltip.innerHTML = `<strong>${wLabel} ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     }
   } else {
