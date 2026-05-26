@@ -182,12 +182,11 @@
         <th class="col-rank">#</th>
         <th class="col-name" data-key="name">Player <span class="arrow"></span></th>
         <th class="col-team">Team</th>
+        <th class="col-num" data-key="net_wrc_plus">Net wRC+ <span class="arrow"></span></th>
         <th class="col-num" data-key="wrc_plus">wRC+ <span class="arrow"></span></th>
         <th class="col-num" data-key="owrc_plus">oWRC+ <span class="arrow"></span></th>
         <th class="col-num" data-key="xwoba">xwOBA <span class="arrow"></span></th>
         <th class="col-num" data-key="pa">PA <span class="arrow"></span></th>
-        <th class="col-num" data-key="hits">Hits <span class="arrow"></span></th>
-        <th class="col-num" data-key="walks">BB <span class="arrow"></span></th>
         <th class="col-num" data-key="bsr">BsR <span class="arrow"></span></th>
         <th class="col-chart">Plate Appearance Run Values</th>
       </tr>
@@ -284,7 +283,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     DATA = await resp.json();
   } catch (e) {
     document.getElementById('tbody').innerHTML =
-      `<tr><td colspan="11" class="msg error">
+      `<tr><td colspan="10" class="msg error">
          Could not load data/player_data.json — run <code>python fetch_data.py</code> first.
        </td></tr>`;
     return;
@@ -648,10 +647,10 @@ function render() {
       rows.push({
         ...p, ...batS,
         owrc_plus: pitS.wrc_plus,
+        net_wrc_plus: (batS.wrc_plus != null && pitS.wrc_plus != null)
+          ? Math.round((batS.wrc_plus + pitS.wrc_plus) / 2) : null,
         pitching_xwoba: pitS.xwoba,
         pitching_pa: pitS.pa,
-        pitching_hits: pitS.hits,
-        pitching_walks: pitS.walks,
         _battingDisplayEvts: batDisplay,
         _battingStatEvts: batStats,
         _pitchingDisplayEvts: pitDisplay,
@@ -744,12 +743,11 @@ function render() {
         <td class="col-rank">${i + 1}</td>
         <td class="col-name" title="${r.name}"><span class="expand-arrow${expanded ? ' open' : ''}">▶</span> ${r.name}</td>
         <td class="col-team"></td>
+        <td class="col-num">${r.net_wrc_plus ?? '–'}</td>
         <td class="col-num">${r.wrc_plus ?? '–'}</td>
         <td class="col-num">${r.owrc_plus ?? '–'}</td>
         <td class="col-num">${r.xwoba.toFixed(3)}</td>
         <td class="col-num">${r.pa}</td>
-        <td class="col-num">${r.hits}</td>
-        <td class="col-num">${r.walks}</td>
         <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
         <td class="col-chart"><canvas></canvas></td>`;
       tr.addEventListener('click', () => {
@@ -770,12 +768,11 @@ function render() {
           <td class="col-rank"></td>
           <td class="col-name"><span class="expand-arrow${hitExpanded ? ' open' : ''}">▶</span> Hitting</td>
           <td class="col-team"></td>
+          <td class="col-num">–</td>
           <td class="col-num">${r.wrc_plus ?? '–'}</td>
           <td class="col-num">–</td>
           <td class="col-num">${r.xwoba.toFixed(3)}</td>
           <td class="col-num">${r.pa}</td>
-          <td class="col-num">${r.hits}</td>
-          <td class="col-num">${r.walks}</td>
           <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
           <td class="col-chart"><canvas></canvas></td>`;
         hitTr.addEventListener('click', e => {
@@ -807,12 +804,11 @@ function render() {
               <td class="col-rank"></td>
               <td class="col-name" title="${pr.name}">${pr.name}</td>
               <td class="col-team">${pr.team || ''}</td>
+              <td class="col-num">–</td>
               <td class="col-num">${pr.wrc_plus}</td>
               <td class="col-num">–</td>
               <td class="col-num">${pr.xwoba.toFixed(3)}</td>
               <td class="col-num">${pr.pa}</td>
-              <td class="col-num">${pr.hits}</td>
-              <td class="col-num">${pr.walks}</td>
               <td class="col-num">${(pr.bsr ?? 0).toFixed(1)}</td>
               <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
@@ -830,11 +826,10 @@ function render() {
           <td class="col-name"><span class="expand-arrow${pitExpanded ? ' open' : ''}">▶</span> Pitching</td>
           <td class="col-team"></td>
           <td class="col-num">–</td>
+          <td class="col-num">–</td>
           <td class="col-num">${r.owrc_plus ?? '–'}</td>
           <td class="col-num">${r.pitching_xwoba?.toFixed(3) ?? '–'}</td>
           <td class="col-num">${r.pitching_pa ?? 0}</td>
-          <td class="col-num">${r.pitching_hits ?? 0}</td>
-          <td class="col-num">${r.pitching_walks ?? 0}</td>
           <td class="col-num">–</td>
           <td class="col-chart"><canvas></canvas></td>`;
         pitTr.addEventListener('click', e => {
@@ -867,11 +862,10 @@ function render() {
               <td class="col-name" title="${pr.name}">${pr.name}</td>
               <td class="col-team">${pr.team || ''}</td>
               <td class="col-num">–</td>
+              <td class="col-num">–</td>
               <td class="col-num">${pr.owrc_plus}</td>
               <td class="col-num">${pr.xwoba.toFixed(3)}</td>
               <td class="col-num">${pr.pa}</td>
-              <td class="col-num">${pr.hits}</td>
-              <td class="col-num">${pr.walks}</td>
               <td class="col-num">–</td>
               <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
@@ -887,12 +881,11 @@ function render() {
         <td class="col-rank">${i + 1}</td>
         <td class="col-name" title="${r.name}">${badge}${r.name}</td>
         <td class="col-team">${r.team}</td>
+        <td class="col-num">–</td>
         <td class="col-num">${r.wrc_plus ?? '–'}</td>
         <td class="col-num">${r.owrc_plus ?? '–'}</td>
         <td class="col-num">${r.xwoba.toFixed(3)}</td>
         <td class="col-num">${r.pa}</td>
-        <td class="col-num">${r.hits}</td>
-        <td class="col-num">${r.walks}</td>
         <td class="col-num">${r.isPitcher ? '–' : (r.bsr ?? 0).toFixed(1)}</td>
         <td class="col-chart"><canvas></canvas></td>`;
       frag.appendChild(tr);
@@ -1189,30 +1182,25 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   const pad = { top: 4, right: 30, bottom: 12, left: 6 };
   const pw = w - pad.left - pad.right;
   const ph = h - pad.top - pad.bottom;
-  const midY = pad.top + ph / 2;
-  const halfH = ph / 2;
-
   const xScale = t => pad.left + (1 - compressedX.scale(t)) * pw;
   const yScaleWrc = v => {
     const clamped = Math.max(WRC_PLUS_MIN, Math.min(WRC_PLUS_MAX, v));
     return pad.top + ph - ((clamped - WRC_PLUS_MIN) / (WRC_PLUS_MAX - WRC_PLUS_MIN)) * ph;
   };
 
+  const midY = yScaleWrc(100);
+  const halfUp = midY - pad.top;
+  const halfDown = (pad.top + ph) - midY;
+
   const MS_PER_DAY = 86400000;
   const sampleT = compressedX.ticks.length > 1 ? compressedX.ticks[0] : Date.now();
   const dayWidthPx = Math.abs(xScale(sampleT + MS_PER_DAY) - xScale(sampleT));
 
-  // ── midline ──
+  // ── midline at 100 wRC+ ──
   ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(pad.left, midY); ctx.lineTo(w - pad.right, midY); ctx.stroke();
-
-  // ── 100 wRC+ dashed line ──
-  ctx.strokeStyle = '#c7c7cc'; ctx.lineWidth = 0.5; ctx.setLineDash([3, 3]);
-  const y100 = yScaleWrc(100);
-  ctx.beginPath(); ctx.moveTo(pad.left, y100); ctx.lineTo(w - pad.right, y100); ctx.stroke();
-  ctx.setLineDash([]);
   ctx.fillStyle = '#9ca3af'; ctx.font = '8px sans-serif'; ctx.textAlign = 'left';
-  ctx.fillText('100', w - pad.right + 3, y100 + 3);
+  ctx.fillText('100', w - pad.right + 3, midY + 3);
 
   // ── season breaks ──
   for (const brk of compressedX.breaks) {
@@ -1266,7 +1254,7 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   for (const [dateStr, totalRV] of batSums) {
     const t = new Date(dateStr + 'T12:00:00').getTime();
     const cx = xScale(t);
-    const segH = (totalRV / yMax) * halfH;
+    const segH = (totalRV / yMax) * halfUp;
     ctx.globalAlpha = 0.7;
     ctx.fillStyle = WRC_LINE_COLOR;
     ctx.fillRect(cx - barW / 2, midY - segH, barW, segH);
@@ -1277,7 +1265,7 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   for (const [dateStr, totalRV] of pitSums) {
     const t = new Date(dateStr + 'T12:00:00').getTime();
     const cx = xScale(t);
-    const segH = (totalRV / yMax) * halfH;
+    const segH = (totalRV / yMax) * halfDown;
     ctx.globalAlpha = 0.45;
     ctx.fillStyle = OWRC_LINE_COLOR;
     ctx.fillRect(cx - barW / 2, midY, barW, segH);
