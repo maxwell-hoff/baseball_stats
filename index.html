@@ -104,8 +104,13 @@
     transition:transform .15s;text-align:center;color:#9ca3af;
   }
   .expand-arrow.open{transform:rotate(90deg)}
+  .section-row{cursor:pointer}
+  .section-row:hover{background:#f0f0ff !important}
+  .section-row td{background:#f4f5f7;border-bottom:1px solid #e5e7eb}
+  .section-row .col-name{padding-left:28px !important;font-weight:600;font-size:13px}
+  .section-row .col-rank{color:transparent}
   .player-subrow td{background:#fafbfc;border-bottom:1px solid #eef0f2}
-  .player-subrow .col-name{padding-left:32px !important;font-weight:400;font-size:13px}
+  .player-subrow .col-name{padding-left:46px !important;font-weight:400;font-size:13px}
   .player-subrow .col-rank{color:transparent}
 
   /* ── Tooltip ────────────────────────────────────────────────── */
@@ -178,6 +183,7 @@
         <th class="col-name" data-key="name">Player <span class="arrow"></span></th>
         <th class="col-team">Team</th>
         <th class="col-num" data-key="wrc_plus">wRC+ <span class="arrow"></span></th>
+        <th class="col-num" data-key="owrc_plus">oWRC+ <span class="arrow"></span></th>
         <th class="col-num" data-key="xwoba">xwOBA <span class="arrow"></span></th>
         <th class="col-num" data-key="pa">PA <span class="arrow"></span></th>
         <th class="col-num" data-key="hits">Hits <span class="arrow"></span></th>
@@ -211,6 +217,7 @@ let yMax = Y_MAX_DEFAULT;
 const WRC_PLUS_MIN = 0;
 const WRC_PLUS_MAX = 250;
 const WRC_LINE_COLOR = '#6366f1';
+const OWRC_LINE_COLOR = '#e11d48';
 const XWOBA_LINE_COLOR = '#14b8a6';
 const WRC_LINE_MIN_PA = 10;
 
@@ -229,6 +236,7 @@ const LEGEND_ITEMS = [
   ['HBP', EVENT_COLORS.hit_by_pitch],
   ['Out', OUT_COLOR],
   ['wRC+', WRC_LINE_COLOR],
+  ['oWRC+', OWRC_LINE_COLOR],
   ['xwOBA', XWOBA_LINE_COLOR],
 ];
 
@@ -252,6 +260,7 @@ let groupBy = 'team-asis';       // 'player' | 'team-asis' | 'team-aswas'
 let chartType = 'bar';           // 'scatter' | 'bar'
 let playerTypeFilter = 'batter'; // 'batter' | 'pitcher' | 'all'
 const expandedTeams = new Set();
+const expandedSections = new Set();
 
 const PA_WINDOWS = {
   season: { team: 6000, player: 600 },
@@ -275,7 +284,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     DATA = await resp.json();
   } catch (e) {
     document.getElementById('tbody').innerHTML =
-      `<tr><td colspan="10" class="msg error">
+      `<tr><td colspan="11" class="msg error">
          Could not load data/player_data.json — run <code>python fetch_data.py</code> first.
        </td></tr>`;
     return;
@@ -356,14 +365,12 @@ function buildYearButtons(years) {
    LEGEND
    ================================================================ */
 function buildLegend() {
-  const wrcLabel = playerTypeFilter === 'pitcher' ? 'oWRC+' : 'wRC+';
   const el = document.getElementById('legend');
   el.innerHTML = LEGEND_ITEMS.map(([label, color]) => {
-    const displayLabel = label === 'wRC+' ? wrcLabel : label;
-    if (label === 'wRC+') {
-      return `<div class="legend-item"><span style="width:16px;height:2px;background:${color};border-radius:1px"></span>${displayLabel}</div>`;
+    if (label === 'wRC+' || label === 'oWRC+') {
+      return `<div class="legend-item"><span style="width:16px;height:2px;background:${color};border-radius:1px"></span>${label}</div>`;
     }
-    return `<div class="legend-item"><span class="dot" style="background:${color}"></span>${displayLabel}</div>`;
+    return `<div class="legend-item"><span class="dot" style="background:${color}"></span>${label}</div>`;
   }).join('');
 }
 
@@ -379,11 +386,14 @@ function bindControls() {
     document.getElementById('search').placeholder =
       groupBy.startsWith('team') ? 'Search team…' : 'Search player…';
     expandedTeams.clear();
+    expandedSections.clear();
     render();
   });
 
   document.getElementById('playerType').addEventListener('change', e => {
     playerTypeFilter = e.target.value;
+    if (playerTypeFilter === 'pitcher' && sort.key === 'wrc_plus') sort.key = 'owrc_plus';
+    else if (playerTypeFilter !== 'pitcher' && sort.key === 'owrc_plus') sort.key = 'wrc_plus';
     render();
   });
 
@@ -435,29 +445,40 @@ function getEventsForEntity(entity, paCount) {
 }
 
 function buildTeamRows(mode) {
-  const effectiveType = playerTypeFilter === 'all' ? 'batter' : playerTypeFilter;
-  const typedPlayers = DATA.players.filter(p => (p.playerType || 'batter') === effectiveType);
+  const batters = DATA.players.filter(p => (p.playerType || 'batter') === 'batter');
+  const pitchers = DATA.players.filter(p => (p.playerType || 'batter') === 'pitcher');
   const teams = new Map();
 
+  function ensureTeam(abbr) {
+    if (!teams.has(abbr)) teams.set(abbr, {
+      name: abbr, team: abbr,
+      battingEvents: [], pitchingEvents: [], events: [],
+      bsr: 0, sb: 0, cs: 0, playerType: 'team',
+    });
+    return teams.get(abbr);
+  }
+
   if (mode === 'team-asis') {
-    for (const p of typedPlayers) {
+    for (const p of batters) {
       const abbr = p.team;
       if (!abbr) continue;
-      if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [], bsr: 0, sb: 0, cs: 0 });
-      const t = teams.get(abbr);
-      for (const e of p.events) t.events.push(e);
-      t.bsr += (p.bsr ?? 0);
-      t.sb += (p.sb ?? 0);
-      t.cs += (p.cs ?? 0);
+      const t = ensureTeam(abbr);
+      for (const e of p.events) t.battingEvents.push(e);
+      t.bsr += (p.bsr ?? 0); t.sb += (p.sb ?? 0); t.cs += (p.cs ?? 0);
+    }
+    for (const p of pitchers) {
+      const abbr = p.team;
+      if (!abbr) continue;
+      const t = ensureTeam(abbr);
+      for (const e of p.events) t.pitchingEvents.push(e);
     }
   } else {
     const playerTeamBsr = new Map();
-    for (const p of typedPlayers) {
+    for (const p of batters) {
       for (const e of p.events) {
         const abbr = e[4];
         if (!abbr) continue;
-        if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [], bsr: 0, sb: 0, cs: 0 });
-        teams.get(abbr).events.push(e);
+        ensureTeam(abbr).battingEvents.push(e);
       }
       const key = `${p.name}_${p.team}`;
       if (!playerTeamBsr.has(key)) {
@@ -470,20 +491,28 @@ function buildTeamRows(mode) {
         }
       }
     }
+    for (const p of pitchers) {
+      for (const e of p.events) {
+        const abbr = e[4];
+        if (!abbr) continue;
+        ensureTeam(abbr).pitchingEvents.push(e);
+      }
+    }
   }
 
+  const evtSort = (a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3];
   for (const t of teams.values()) {
-    t.events.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
+    t.battingEvents.sort(evtSort);
+    t.pitchingEvents.sort(evtSort);
+    t.events = t.battingEvents;
     t.bsr = Math.round(t.bsr * 10) / 10;
-    t.playerType = effectiveType;
   }
 
   return [...teams.values()];
 }
 
-function getPlayersForTeam(teamAbbr) {
-  const effectiveType = playerTypeFilter === 'all' ? 'batter' : playerTypeFilter;
-  const typedPlayers = DATA.players.filter(p => (p.playerType || 'batter') === effectiveType);
+function getPlayersForTeam(teamAbbr, type) {
+  const typedPlayers = DATA.players.filter(p => (p.playerType || 'batter') === type);
   if (groupBy === 'team-asis') {
     return typedPlayers.filter(p => p.team === teamAbbr);
   }
@@ -588,13 +617,8 @@ function render() {
   const nameHeader = document.querySelector('#thead-row th[data-key="name"]');
   nameHeader.childNodes[0].textContent = isTeam ? 'Team ' : 'Player ';
 
-  const wrcHeader = document.querySelector('#thead-row th[data-key="wrc_plus"]');
-  wrcHeader.childNodes[0].textContent = playerTypeFilter === 'pitcher' ? 'oWRC+ ' : 'wRC+ ';
-
   document.getElementById('search').placeholder = isTeam ? 'Search team…' :
     playerTypeFilter === 'pitcher' ? 'Search pitcher…' : 'Search player…';
-
-  buildLegend();
 
   const filteredPlayers = playerTypeFilter === 'all'
     ? DATA.players
@@ -606,28 +630,69 @@ function render() {
   const rows = [];
   const allTimestamps = [];
   for (const p of source) {
-    const { display, stats } = getEventsForEntity(p, paCount);
-    if (display.length === 0) continue;
-    const isPitcher = (p.playerType || 'batter') === 'pitcher';
-    const s = computeStats(stats, isPitcher);
-    if (viewMode === 'pa') {
-      const curSeasonPA = display.filter(e => parseInt(e[0].substring(0, 4)) === currentYear).length;
-      if (curSeasonPA < minPA) continue;
+    if (isTeam) {
+      const batEntity = { events: p.battingEvents };
+      const pitEntity = { events: p.pitchingEvents };
+      const { display: batDisplay, stats: batStats } = getEventsForEntity(batEntity, paCount);
+      const { display: pitDisplay, stats: pitStats } = getEventsForEntity(pitEntity, paCount);
+      if (batDisplay.length === 0 && pitDisplay.length === 0) continue;
+      const batS = computeStats(batStats, false);
+      const pitS = computeStats(pitStats, true);
+      if (viewMode === 'pa') {
+        const curSeasonPA = batDisplay.filter(e => parseInt(e[0].substring(0, 4)) === currentYear).length;
+        if (curSeasonPA < minPA) continue;
+      } else {
+        if (batS.pa < minPA) continue;
+      }
+      if (q && !p.name.toLowerCase().includes(q)) continue;
+      rows.push({
+        ...p, ...batS,
+        owrc_plus: pitS.wrc_plus,
+        pitching_xwoba: pitS.xwoba,
+        pitching_pa: pitS.pa,
+        pitching_hits: pitS.hits,
+        pitching_walks: pitS.walks,
+        _battingDisplayEvts: batDisplay,
+        _battingStatEvts: batStats,
+        _pitchingDisplayEvts: pitDisplay,
+        _pitchingStatEvts: pitStats,
+        _displayEvts: batDisplay,
+        _statEvts: batStats,
+        _paCount: paCount,
+        isPitcher: false,
+        isTeamRow: true,
+      });
+      for (const [d] of batDisplay) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
+      for (const [d] of pitDisplay) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
     } else {
-      if (s.pa < minPA) continue;
+      const { display, stats } = getEventsForEntity(p, paCount);
+      if (display.length === 0) continue;
+      const isPitcher = (p.playerType || 'batter') === 'pitcher';
+      const s = computeStats(stats, isPitcher);
+      if (viewMode === 'pa') {
+        const curSeasonPA = display.filter(e => parseInt(e[0].substring(0, 4)) === currentYear).length;
+        if (curSeasonPA < minPA) continue;
+      } else {
+        if (s.pa < minPA) continue;
+      }
+      if (q && !p.name.toLowerCase().includes(q)) continue;
+      rows.push({
+        ...p, ...s,
+        wrc_plus: isPitcher ? null : s.wrc_plus,
+        owrc_plus: isPitcher ? s.wrc_plus : null,
+        _displayEvts: display, _statEvts: stats, _paCount: paCount, isPitcher,
+      });
+      for (const [d] of display) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
     }
-    if (q && !p.name.toLowerCase().includes(q)) continue;
-    rows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats, _paCount: paCount, isPitcher });
-    for (const [d] of display) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
   }
 
   compressedX = buildCompressedScale(allTimestamps);
 
-  // Compute dynamic y-axis max: largest per-game positive run-value total across all visible entities
   let maxGameRV = Y_MAX_DEFAULT;
   for (const r of rows) {
+    const evts = r.isTeamRow ? [...(r._battingDisplayEvts || []), ...(r._pitchingDisplayEvts || [])] : r._displayEvts;
     const byDate = new Map();
-    for (const e of r._displayEvts) {
+    for (const e of evts) {
       const d = e[0];
       if (!byDate.has(d)) byDate.set(d, 0);
       if (e[2] > 0) byDate.set(d, byDate.get(d) + e[2]);
@@ -642,7 +707,13 @@ function render() {
   if (sort.key === 'name') {
     rows.sort((a, b) => dir * a.name.localeCompare(b.name));
   } else {
-    rows.sort((a, b) => dir * (a[sort.key] - b[sort.key]));
+    rows.sort((a, b) => {
+      const av = a[sort.key]; const bv = b[sort.key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return dir * (av - bv);
+    });
   }
 
   document.querySelectorAll('#thead-row th[data-key]').forEach(th => {
@@ -673,12 +744,13 @@ function render() {
         <td class="col-rank">${i + 1}</td>
         <td class="col-name" title="${r.name}"><span class="expand-arrow${expanded ? ' open' : ''}">▶</span> ${r.name}</td>
         <td class="col-team"></td>
-        <td class="col-num">${r.wrc_plus}</td>
+        <td class="col-num">${r.wrc_plus ?? '–'}</td>
+        <td class="col-num">${r.owrc_plus ?? '–'}</td>
         <td class="col-num">${r.xwoba.toFixed(3)}</td>
         <td class="col-num">${r.pa}</td>
         <td class="col-num">${r.hits}</td>
         <td class="col-num">${r.walks}</td>
-        <td class="col-num">${r.isPitcher ? '–' : (r.bsr ?? 0).toFixed(1)}</td>
+        <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
         <td class="col-chart"><canvas></canvas></td>`;
       tr.addEventListener('click', () => {
         if (expandedTeams.has(r.team)) expandedTeams.delete(r.team);
@@ -689,32 +761,122 @@ function render() {
       canvasMap.set(tr.querySelector('canvas'), r);
 
       if (expanded) {
-        const players = getPlayersForTeam(r.team);
-        const playerRows = [];
-        for (const p of players) {
-          const { display, stats } = getEventsForEntity(p, playerPaCount);
-          if (display.length === 0) continue;
-          const isPitcher = (p.playerType || 'batter') === 'pitcher';
-          const s = computeStats(stats, isPitcher);
-          playerRows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats, _paCount: playerPaCount, isPitcher });
+        // ── Hitting section ──
+        const hitKey = r.team + '-hitting';
+        const hitExpanded = expandedSections.has(hitKey);
+        const hitTr = document.createElement('tr');
+        hitTr.classList.add('section-row');
+        hitTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name"><span class="expand-arrow${hitExpanded ? ' open' : ''}">▶</span> Hitting</td>
+          <td class="col-team"></td>
+          <td class="col-num">${r.wrc_plus ?? '–'}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.xwoba.toFixed(3)}</td>
+          <td class="col-num">${r.pa}</td>
+          <td class="col-num">${r.hits}</td>
+          <td class="col-num">${r.walks}</td>
+          <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
+          <td class="col-chart"><canvas></canvas></td>`;
+        hitTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(hitKey)) expandedSections.delete(hitKey);
+          else expandedSections.add(hitKey);
+          render();
+        });
+        frag.appendChild(hitTr);
+        canvasMap.set(hitTr.querySelector('canvas'), {
+          _displayEvts: r._battingDisplayEvts, _statEvts: r._battingStatEvts,
+          _paCount: r._paCount, isPitcher: false,
+        });
+
+        if (hitExpanded) {
+          const hitters = getPlayersForTeam(r.team, 'batter');
+          const hitterRows = [];
+          for (const p of hitters) {
+            const { display, stats } = getEventsForEntity(p, playerPaCount);
+            if (display.length === 0) continue;
+            const s = computeStats(stats, false);
+            hitterRows.push({ ...p, ...s, owrc_plus: null, _displayEvts: display, _statEvts: stats, _paCount: playerPaCount, isPitcher: false });
+          }
+          hitterRows.sort((a, b) => b.wrc_plus - a.wrc_plus);
+          for (const pr of hitterRows) {
+            const subTr = document.createElement('tr');
+            subTr.classList.add('player-subrow');
+            subTr.innerHTML = `
+              <td class="col-rank"></td>
+              <td class="col-name" title="${pr.name}">${pr.name}</td>
+              <td class="col-team">${pr.team || ''}</td>
+              <td class="col-num">${pr.wrc_plus}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.xwoba.toFixed(3)}</td>
+              <td class="col-num">${pr.pa}</td>
+              <td class="col-num">${pr.hits}</td>
+              <td class="col-num">${pr.walks}</td>
+              <td class="col-num">${(pr.bsr ?? 0).toFixed(1)}</td>
+              <td class="col-chart"><canvas></canvas></td>`;
+            frag.appendChild(subTr);
+            canvasMap.set(subTr.querySelector('canvas'), pr);
+          }
         }
-        playerRows.sort((a, b) => b.wrc_plus - a.wrc_plus);
-        for (const pr of playerRows) {
-          const subTr = document.createElement('tr');
-          subTr.classList.add('player-subrow');
-          subTr.innerHTML = `
-            <td class="col-rank"></td>
-            <td class="col-name" title="${pr.name}">${pr.name}</td>
-            <td class="col-team">${pr.team || ''}</td>
-            <td class="col-num">${pr.wrc_plus}</td>
-            <td class="col-num">${pr.xwoba.toFixed(3)}</td>
-            <td class="col-num">${pr.pa}</td>
-            <td class="col-num">${pr.hits}</td>
-            <td class="col-num">${pr.walks}</td>
-            <td class="col-num">${pr.isPitcher ? '–' : (pr.bsr ?? 0).toFixed(1)}</td>
-            <td class="col-chart"><canvas></canvas></td>`;
-          frag.appendChild(subTr);
-          canvasMap.set(subTr.querySelector('canvas'), pr);
+
+        // ── Pitching section ──
+        const pitKey = r.team + '-pitching';
+        const pitExpanded = expandedSections.has(pitKey);
+        const pitTr = document.createElement('tr');
+        pitTr.classList.add('section-row');
+        pitTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name"><span class="expand-arrow${pitExpanded ? ' open' : ''}">▶</span> Pitching</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.owrc_plus ?? '–'}</td>
+          <td class="col-num">${r.pitching_xwoba?.toFixed(3) ?? '–'}</td>
+          <td class="col-num">${r.pitching_pa ?? 0}</td>
+          <td class="col-num">${r.pitching_hits ?? 0}</td>
+          <td class="col-num">${r.pitching_walks ?? 0}</td>
+          <td class="col-num">–</td>
+          <td class="col-chart"><canvas></canvas></td>`;
+        pitTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(pitKey)) expandedSections.delete(pitKey);
+          else expandedSections.add(pitKey);
+          render();
+        });
+        frag.appendChild(pitTr);
+        canvasMap.set(pitTr.querySelector('canvas'), {
+          _displayEvts: r._pitchingDisplayEvts, _statEvts: r._pitchingStatEvts,
+          _paCount: r._paCount, isPitcher: true,
+        });
+
+        if (pitExpanded) {
+          const pitcherPlayers = getPlayersForTeam(r.team, 'pitcher');
+          const pitcherRows = [];
+          for (const p of pitcherPlayers) {
+            const { display, stats } = getEventsForEntity(p, playerPaCount);
+            if (display.length === 0) continue;
+            const s = computeStats(stats, true);
+            pitcherRows.push({ ...p, ...s, wrc_plus: null, owrc_plus: s.wrc_plus, _displayEvts: display, _statEvts: stats, _paCount: playerPaCount, isPitcher: true });
+          }
+          pitcherRows.sort((a, b) => (b.owrc_plus ?? 0) - (a.owrc_plus ?? 0));
+          for (const pr of pitcherRows) {
+            const subTr = document.createElement('tr');
+            subTr.classList.add('player-subrow');
+            subTr.innerHTML = `
+              <td class="col-rank"></td>
+              <td class="col-name" title="${pr.name}">${pr.name}</td>
+              <td class="col-team">${pr.team || ''}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.owrc_plus}</td>
+              <td class="col-num">${pr.xwoba.toFixed(3)}</td>
+              <td class="col-num">${pr.pa}</td>
+              <td class="col-num">${pr.hits}</td>
+              <td class="col-num">${pr.walks}</td>
+              <td class="col-num">–</td>
+              <td class="col-chart"><canvas></canvas></td>`;
+            frag.appendChild(subTr);
+            canvasMap.set(subTr.querySelector('canvas'), pr);
+          }
         }
       }
     } else {
@@ -725,7 +887,8 @@ function render() {
         <td class="col-rank">${i + 1}</td>
         <td class="col-name" title="${r.name}">${badge}${r.name}</td>
         <td class="col-team">${r.team}</td>
-        <td class="col-num">${r.wrc_plus}</td>
+        <td class="col-num">${r.wrc_plus ?? '–'}</td>
+        <td class="col-num">${r.owrc_plus ?? '–'}</td>
         <td class="col-num">${r.xwoba.toFixed(3)}</td>
         <td class="col-num">${r.pa}</td>
         <td class="col-num">${r.hits}</td>
@@ -774,7 +937,7 @@ function drawAllCharts() {
   canvasMap.forEach((row, canvas) => {
     const td = canvas.parentElement;
     const cssW = td.clientWidth - 20;
-    const cssH = 90;
+    const cssH = row.isTeamRow ? 140 : 90;
     const dpr = window.devicePixelRatio || 1;
     canvas.width  = cssW * dpr;
     canvas.height = cssH * dpr;
@@ -782,7 +945,11 @@ function drawAllCharts() {
     canvas.style.height = cssH + 'px';
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    drawChart(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH, row._paCount, row.isPitcher);
+    if (row.isTeamRow) {
+      drawTeamChart(ctx, canvas, row, cssW, cssH, row._paCount);
+    } else {
+      drawChart(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH, row._paCount, row.isPitcher);
+    }
   });
 }
 
@@ -1011,6 +1178,206 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
 }
 
 /* ================================================================
+   TEAM BUTTERFLY CHART
+   ================================================================ */
+function drawTeamChart(ctx, canvas, row, w, h, paCount) {
+  const batDisplay = row._battingDisplayEvts;
+  const pitDisplay = row._pitchingDisplayEvts;
+  const batStats = row._battingStatEvts;
+  const pitStats = row._pitchingStatEvts;
+
+  const pad = { top: 4, right: 30, bottom: 12, left: 6 };
+  const pw = w - pad.left - pad.right;
+  const ph = h - pad.top - pad.bottom;
+  const midY = pad.top + ph / 2;
+  const halfH = ph / 2;
+
+  const xScale = t => pad.left + (1 - compressedX.scale(t)) * pw;
+  const yScaleWrc = v => {
+    const clamped = Math.max(WRC_PLUS_MIN, Math.min(WRC_PLUS_MAX, v));
+    return pad.top + ph - ((clamped - WRC_PLUS_MIN) / (WRC_PLUS_MAX - WRC_PLUS_MIN)) * ph;
+  };
+
+  const MS_PER_DAY = 86400000;
+  const sampleT = compressedX.ticks.length > 1 ? compressedX.ticks[0] : Date.now();
+  const dayWidthPx = Math.abs(xScale(sampleT + MS_PER_DAY) - xScale(sampleT));
+
+  // ── midline ──
+  ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad.left, midY); ctx.lineTo(w - pad.right, midY); ctx.stroke();
+
+  // ── 100 wRC+ dashed line ──
+  ctx.strokeStyle = '#c7c7cc'; ctx.lineWidth = 0.5; ctx.setLineDash([3, 3]);
+  const y100 = yScaleWrc(100);
+  ctx.beginPath(); ctx.moveTo(pad.left, y100); ctx.lineTo(w - pad.right, y100); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#9ca3af'; ctx.font = '8px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('100', w - pad.right + 3, y100 + 3);
+
+  // ── season breaks ──
+  for (const brk of compressedX.breaks) {
+    const bxPx = pad.left + (1 - brk.frac) * pw;
+    ctx.strokeStyle = '#6366f1'; ctx.lineWidth = 1; ctx.globalAlpha = 0.35;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(bxPx, pad.top); ctx.lineTo(bxPx, pad.top + ph); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = '#6366f1'; ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(String(brk.yearAfter), bxPx, pad.top + 8);
+    ctx.globalAlpha = 1;
+  }
+
+  // ── month labels ──
+  ctx.fillStyle = '#b0b0b0'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const dataMonths = compressedX.dataMonths || new Set();
+  if (compressedX.ticks.length > 0) {
+    const dStart = new Date(compressedX.ticks[0]);
+    const dEnd = new Date(compressedX.ticks[compressedX.ticks.length - 1]);
+    const multiYear = dEnd.getFullYear() - dStart.getFullYear() >= 1;
+    const labeledMonths = new Set();
+    let cur = new Date(dStart.getFullYear(), dStart.getMonth(), 15);
+    while (cur <= dEnd) {
+      const key = cur.getFullYear() * 100 + cur.getMonth();
+      if (!labeledMonths.has(key) && dataMonths.has(key)) {
+        const t = cur.getTime();
+        const label = multiYear ? monthNames[cur.getMonth()] + ' ' + String(cur.getFullYear()).slice(2) : monthNames[cur.getMonth()];
+        const xPos = xScale(t);
+        if (xPos > pad.left + 10 && xPos < w - pad.right - 10) ctx.fillText(label, xPos, h - 1);
+        labeledMonths.add(key);
+      }
+      cur.setMonth(cur.getMonth() + 1);
+    }
+  }
+
+  // ── sum positive run values per date (single bar per date) ──
+  function sumByDate(events) {
+    const m = new Map();
+    for (const e of events) { if (e[2] > 0) m.set(e[0], (m.get(e[0]) || 0) + e[2]); }
+    return m;
+  }
+  const batSums = sumByDate(batDisplay);
+  const pitSums = sumByDate(pitDisplay);
+
+  const pts = [];
+  const barW = Math.max(1, Math.min(dayWidthPx * 0.7, 8));
+
+  // ── batting bars (up from midline, single color) ──
+  for (const [dateStr, totalRV] of batSums) {
+    const t = new Date(dateStr + 'T12:00:00').getTime();
+    const cx = xScale(t);
+    const segH = (totalRV / yMax) * halfH;
+    ctx.globalAlpha = 0.7;
+    ctx.fillStyle = WRC_LINE_COLOR;
+    ctx.fillRect(cx - barW / 2, midY - segH, barW, segH);
+    pts.push({ x: cx, y: midY - segH / 2, r: barW / 2 + 3, evt: 'hitting', date: dateStr, rv: totalRV, side: 'bat' });
+  }
+
+  // ── pitching bars (down from midline, single color) ──
+  for (const [dateStr, totalRV] of pitSums) {
+    const t = new Date(dateStr + 'T12:00:00').getTime();
+    const cx = xScale(t);
+    const segH = (totalRV / yMax) * halfH;
+    ctx.globalAlpha = 0.45;
+    ctx.fillStyle = OWRC_LINE_COLOR;
+    ctx.fillRect(cx - barW / 2, midY, barW, segH);
+    pts.push({ x: cx, y: midY + segH / 2, r: barW / 2 + 3, evt: 'pitching', date: dateStr, rv: totalRV, side: 'pit' });
+  }
+  ctx.globalAlpha = 1;
+
+  // ── compute running lines (wRC+ and xwRC+) for each side ──
+  function computeRunningLine(events, invert) {
+    const useRolling = viewMode === 'pa';
+    const chron = [...events].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
+    let wN = 0, wD = 0, xN = 0, xD = 0, pS = 0, pC = 0;
+    const win = [], points = [];
+    for (const e of chron) {
+      const [dateStr, evt, rv, , , xw, stadium, hand] = e;
+      const inD = !WOBA_DENOM_EXCLUDE.has(evt);
+      const xVal = (xw != null && inD) ? xw : (inD ? rv : 0);
+      const pf = getParkFactor(stadium, hand);
+      win.push({ rv, inD, xVal, pf });
+      wN += rv; xN += xVal; if (inD) { wD++; xD++; } pS += pf; pC++;
+      if (useRolling) {
+        while (win.length > paCount) {
+          const old = win.shift();
+          wN -= old.rv; xN -= old.xVal; if (old.inD) { wD--; xD--; } pS -= old.pf; pC--;
+        }
+      }
+      const minP = useRolling ? Math.min(paCount, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA;
+      if (win.length >= minP && wD > 0) {
+        const t = new Date(dateStr + 'T12:00:00').getTime();
+        const x = xScale(t);
+        const meanPF = pC > 0 ? pS / pC : 1.0;
+        const woba = wN / wD;
+        const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
+        let wrcPlus = ((wraaPerPa + curLC.lgRPA + (curLC.lgRPA - meanPF * curLC.lgRPA)) / curLC.lgRPA) * 100;
+        if (invert) wrcPlus = 200 - wrcPlus;
+        let xWrcPlus = null;
+        if (xD > 0) {
+          const xw2 = xN / xD;
+          const xWraa = (xw2 - curLC.lgwOBA) / curLC.wOBAScale;
+          xWrcPlus = ((xWraa + curLC.lgRPA) / curLC.lgRPA) * 100;
+          if (invert) xWrcPlus = 200 - xWrcPlus;
+        }
+        points.push({ x, date: dateStr, wrcPlus, xWrcPlus, paNum: win.length });
+      }
+    }
+    return points;
+  }
+
+  const batLine = computeRunningLine(viewMode === 'pa' ? batDisplay : batStats, false);
+  const pitLine = computeRunningLine(viewMode === 'pa' ? pitDisplay : pitStats, true);
+
+  // ── merge into net wRC+ and net xwRC+ lines ──
+  const batByDate2 = new Map(); for (const p of batLine) batByDate2.set(p.date, p);
+  const pitByDate2 = new Map(); for (const p of pitLine) pitByDate2.set(p.date, p);
+  const allLineDates = [...new Set([...batLine.map(p => p.date), ...pitLine.map(p => p.date)])].sort();
+
+  let lastBat = null, lastPit = null;
+  const netWrcLine = [], netXwrcLine = [];
+  for (const date of allLineDates) {
+    if (batByDate2.has(date)) lastBat = batByDate2.get(date);
+    if (pitByDate2.has(date)) lastPit = pitByDate2.get(date);
+    if (!lastBat || !lastPit) continue;
+    const x = (batByDate2.has(date) ? batByDate2.get(date) : pitByDate2.get(date)).x;
+    const totalPA = lastBat.paNum + lastPit.paNum;
+    const netWrc = (lastBat.wrcPlus + lastPit.wrcPlus) / 2;
+    netWrcLine.push({ x, y: yScaleWrc(netWrc), wrcPlus: netWrc, paNum: totalPA, date });
+    if (lastBat.xWrcPlus != null && lastPit.xWrcPlus != null) {
+      const netXwrc = (lastBat.xWrcPlus + lastPit.xWrcPlus) / 2;
+      netXwrcLine.push({ x, y: yScaleWrc(netXwrc), xWrcPlus: netXwrc, paNum: totalPA, date });
+    }
+  }
+
+  if (netWrcLine.length > 1) {
+    ctx.beginPath(); ctx.moveTo(netWrcLine[0].x, netWrcLine[0].y);
+    for (let i = 1; i < netWrcLine.length; i++) ctx.lineTo(netWrcLine[i].x, netWrcLine[i].y);
+    ctx.strokeStyle = WRC_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.7;
+    ctx.stroke(); ctx.globalAlpha = 1;
+  }
+  if (netXwrcLine.length > 1) {
+    ctx.beginPath(); ctx.moveTo(netXwrcLine[0].x, netXwrcLine[0].y);
+    for (let i = 1; i < netXwrcLine.length; i++) ctx.lineTo(netXwrcLine[i].x, netXwrcLine[i].y);
+    ctx.strokeStyle = XWOBA_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.7;
+    ctx.setLineDash([4, 3]);
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+
+  // ── side labels ──
+  ctx.font = '8px sans-serif'; ctx.globalAlpha = 0.6;
+  ctx.fillStyle = WRC_LINE_COLOR; ctx.textAlign = 'right';
+  ctx.fillText('Hitting ▲', w - pad.right - 2, pad.top + 10);
+  ctx.fillStyle = OWRC_LINE_COLOR;
+  ctx.fillText('Pitching ▼', w - pad.right - 2, h - pad.bottom - 4);
+  ctx.globalAlpha = 1;
+
+  pointsMap.set(canvas, pts);
+  lineMap.set(canvas, netWrcLine.map(lp => ({ ...lp, type: 'net-wrc' })));
+  xLineMap.set(canvas, netXwrcLine.map(lp => ({ ...lp, type: 'net-xwrc' })));
+}
+
+/* ================================================================
    TOOLTIP
    ================================================================ */
 const tooltip = document.getElementById('tooltip');
@@ -1046,8 +1413,8 @@ document.addEventListener('mousemove', e => {
   }
 
   const allLines = [
-    ...(lineMap.get(canvas) || []).map(lp => ({ ...lp, type: 'wrc' })),
-    ...(xLineMap.get(canvas) || []).map(lp => ({ ...lp, type: 'xwoba' })),
+    ...(lineMap.get(canvas) || []).map(lp => ({ type: 'wrc', ...lp })),
+    ...(xLineMap.get(canvas) || []).map(lp => ({ type: 'xwoba', ...lp })),
   ];
   let bestLine = null, bestLineDist = 8;
   for (const lp of allLines) {
@@ -1063,16 +1430,29 @@ document.addEventListener('mousemove', e => {
     tooltip.style.opacity = 1;
     tooltip.style.left = (e.clientX + 14) + 'px';
     tooltip.style.top  = (e.clientY - 10) + 'px';
-    tooltip.innerHTML = `<strong>${PRETTY[best.evt] || best.evt}</strong><br>` +
+    const evtLabel = best.evt === 'hitting' ? 'Hitting'
+      : best.evt === 'pitching' ? 'Pitching'
+      : best.side === 'pit' ? `${PRETTY[best.evt] || best.evt} (allowed)`
+      : (PRETTY[best.evt] || best.evt);
+    tooltip.innerHTML = `<strong>${evtLabel}</strong><br>` +
       `${best.date} · Run value ${best.rv.toFixed(3)}`;
   } else if (bestLine) {
     tooltip.style.opacity = 1;
     tooltip.style.left = (e.clientX + 14) + 'px';
     tooltip.style.top  = (e.clientY - 10) + 'px';
     const windowLabel = viewMode === 'pa' ? ` (last ${bestLine.paNum} PA)` : ` · After ${bestLine.paNum} PA`;
-    if (bestLine.type === 'xwoba') {
+    if (bestLine.type === 'net-wrc') {
+      tooltip.innerHTML = `<strong>Net wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'net-xwrc') {
+      tooltip.innerHTML = `<strong>Net xwRC+ ${Math.round(bestLine.xWrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'xwoba') {
       const xLabel = isPitcherRow ? 'oWRC+' : 'xwRC+';
       tooltip.innerHTML = `<strong>xwOBA ${bestLine.xwoba.toFixed(3)}</strong> (${xLabel} ${Math.round(bestLine.xWrcPlus)})<br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'owrc') {
+      tooltip.innerHTML = `<strong>oWRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     } else {
       const wLabel = isPitcherRow ? 'oWRC+' : 'wRC+';
