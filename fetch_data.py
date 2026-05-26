@@ -297,8 +297,64 @@ def build_pitcher_json(all_pa: pd.DataFrame) -> list[dict]:
         p["bsr"] = 0.0
         p["sb"] = 0
         p["cs"] = 0
+        p["def_runs"] = 0.0
 
     return list(pitchers.values())
+
+
+def fetch_fielding_runs(years: list[int]) -> dict[int, float]:
+    """Fetch Defensive Runs Above Average (Def) from FanGraphs batting leaderboards.
+
+    Returns {mlbam_id: cumulative_def_runs} across all requested years.
+    """
+    fg_def: dict[int, float] = {}
+
+    for year in years:
+        print(f"    Fetching FanGraphs batting leaderboard for {year} …")
+        try:
+            fg = pybaseball.batting_stats(year, qual=0)
+            if fg.empty:
+                print(f"      Empty result for {year}, skipping.")
+                continue
+            if "Def" not in fg.columns or "IDfg" not in fg.columns:
+                print(f"      Missing Def/IDfg columns for {year}, skipping.")
+                continue
+            for _, row in fg.iterrows():
+                fg_id = row.get("IDfg")
+                def_val = row.get("Def", 0)
+                if pd.notna(fg_id) and pd.notna(def_val):
+                    fg_id = int(fg_id)
+                    fg_def[fg_id] = fg_def.get(fg_id, 0.0) + float(def_val)
+        except Exception as e:
+            print(f"      Warning: could not fetch for {year}: {e}")
+
+    if not fg_def:
+        print("    No fielding data found.")
+        return {}
+
+    fg_ids = list(fg_def.keys())
+    print(f"    Mapping {len(fg_ids):,} FanGraphs IDs → MLBAM …")
+    try:
+        mapping = pybaseball.playerid_reverse_lookup(fg_ids, key_type="fangraphs")
+    except Exception as e:
+        print(f"    Warning: ID mapping failed: {e}")
+        return {}
+
+    fg_to_mlbam: dict[int, int] = {}
+    for _, row in mapping.iterrows():
+        fid = row.get("key_fangraphs")
+        mid = row.get("key_mlbam")
+        if pd.notna(fid) and pd.notna(mid):
+            fg_to_mlbam[int(fid)] = int(mid)
+
+    result: dict[int, float] = {}
+    for fg_id, def_val in fg_def.items():
+        mlbam_id = fg_to_mlbam.get(fg_id)
+        if mlbam_id:
+            result[mlbam_id] = round(def_val, 2)
+
+    print(f"    Mapped fielding data for {len(result):,} players.")
+    return result
 
 
 def main():
@@ -346,6 +402,9 @@ def main():
     bsr_data = compute_bsr(all_raw, all_pa)
     del all_raw
 
+    print(f"\n  Fetching fielding data (Defensive Runs) …")
+    def_data = fetch_fielding_runs(years)
+
     player_list, id_map = build_player_json(all_pa)
     print(f"  {len(player_list):,} unique batters")
 
@@ -355,6 +414,7 @@ def main():
         p["bsr"] = b.get("bsr", 0.0)
         p["sb"] = b.get("sb", 0)
         p["cs"] = b.get("cs", 0)
+        p["def_runs"] = def_data.get(bid, 0.0)
         p["playerType"] = "batter"
 
     print(f"\n  Building pitcher records …")

@@ -452,7 +452,7 @@ function buildTeamRows(mode) {
     if (!teams.has(abbr)) teams.set(abbr, {
       name: abbr, team: abbr,
       battingEvents: [], pitchingEvents: [], events: [],
-      bsr: 0, sb: 0, cs: 0, playerType: 'team',
+      bsr: 0, sb: 0, cs: 0, def_runs: 0, playerType: 'team',
     });
     return teams.get(abbr);
   }
@@ -464,6 +464,7 @@ function buildTeamRows(mode) {
       const t = ensureTeam(abbr);
       for (const e of p.events) t.battingEvents.push(e);
       t.bsr += (p.bsr ?? 0); t.sb += (p.sb ?? 0); t.cs += (p.cs ?? 0);
+      t.def_runs += (p.def_runs ?? 0);
     }
     for (const p of pitchers) {
       const abbr = p.team;
@@ -487,6 +488,7 @@ function buildTeamRows(mode) {
           teams.get(abbr).bsr += (p.bsr ?? 0);
           teams.get(abbr).sb += (p.sb ?? 0);
           teams.get(abbr).cs += (p.cs ?? 0);
+          teams.get(abbr).def_runs += (p.def_runs ?? 0);
         }
       }
     }
@@ -505,6 +507,7 @@ function buildTeamRows(mode) {
     t.pitchingEvents.sort(evtSort);
     t.events = t.battingEvents;
     t.bsr = Math.round(t.bsr * 10) / 10;
+    t.def_runs = Math.round(t.def_runs * 10) / 10;
   }
 
   return [...teams.values()];
@@ -644,11 +647,16 @@ function render() {
         if (batS.pa < minPA) continue;
       }
       if (q && !p.name.toLowerCase().includes(q)) continue;
+      const batRAA = (batS.wrc_plus - 100) / 100 * curLC.lgRPA * batS.pa;
+      const pitRAA = (pitS.wrc_plus - 100) / 100 * curLC.lgRPA * pitS.pa;
+      const totalRAA = batRAA + pitRAA + (p.bsr ?? 0) + (p.def_runs ?? 0);
+      const totalPA = batS.pa + pitS.pa;
       rows.push({
         ...p, ...batS,
         owrc_plus: pitS.wrc_plus,
-        net_wrc_plus: (batS.wrc_plus != null && pitS.wrc_plus != null)
-          ? Math.round((batS.wrc_plus + pitS.wrc_plus) / 2) : null,
+        net_wrc_plus: totalPA > 0
+          ? Math.round(100 + totalRAA / (curLC.lgRPA * totalPA) * 100)
+          : null,
         pitching_xwoba: pitS.xwoba,
         pitching_pa: pitS.pa,
         _battingDisplayEvts: batDisplay,
@@ -870,6 +878,114 @@ function render() {
               <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
             canvasMap.set(subTr.querySelector('canvas'), pr);
+          }
+        }
+
+        // ── Baserunning section ──
+        const bsrKey = r.team + '-baserunning';
+        const bsrExpanded = expandedSections.has(bsrKey);
+        const bsrPlus = r.pa > 0 ? Math.round(100 + (r.bsr ?? 0) / (curLC.lgRPA * r.pa) * 100) : '–';
+        const bsrTr = document.createElement('tr');
+        bsrTr.classList.add('section-row');
+        bsrTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name"><span class="expand-arrow${bsrExpanded ? ' open' : ''}">▶</span> Baserunning</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">${bsrPlus}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.pa}</td>
+          <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
+          <td class="col-chart" style="color:#9ca3af;font-size:12px;font-style:italic;text-align:center;vertical-align:middle">Aggregate stat</td>`;
+        bsrTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(bsrKey)) expandedSections.delete(bsrKey);
+          else expandedSections.add(bsrKey);
+          render();
+        });
+        frag.appendChild(bsrTr);
+
+        if (bsrExpanded) {
+          const bsrPlayers = getPlayersForTeam(r.team, 'batter');
+          const bsrRows = [];
+          for (const p of bsrPlayers) {
+            const { display, stats } = getEventsForEntity(p, playerPaCount);
+            if (display.length === 0) continue;
+            const s = computeStats(stats, false);
+            const playerBsrPlus = s.pa > 0 ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * s.pa) * 100) : '–';
+            bsrRows.push({ ...p, ...s, bsr_plus: playerBsrPlus });
+          }
+          bsrRows.sort((a, b) => (b.bsr ?? 0) - (a.bsr ?? 0));
+          for (const pr of bsrRows) {
+            const subTr = document.createElement('tr');
+            subTr.classList.add('player-subrow');
+            subTr.innerHTML = `
+              <td class="col-rank"></td>
+              <td class="col-name" title="${pr.name}">${pr.name}</td>
+              <td class="col-team">${pr.team || ''}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.bsr_plus}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.pa}</td>
+              <td class="col-num">${(pr.bsr ?? 0).toFixed(1)}</td>
+              <td class="col-chart"></td>`;
+            frag.appendChild(subTr);
+          }
+        }
+
+        // ── Fielding section ──
+        const defKey = r.team + '-fielding';
+        const defExpanded = expandedSections.has(defKey);
+        const defPlus = r.pa > 0 ? Math.round(100 + (r.def_runs ?? 0) / (curLC.lgRPA * r.pa) * 100) : '–';
+        const defTr = document.createElement('tr');
+        defTr.classList.add('section-row');
+        defTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name"><span class="expand-arrow${defExpanded ? ' open' : ''}">▶</span> Fielding</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">${defPlus}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.pa}</td>
+          <td class="col-num">${(r.def_runs ?? 0).toFixed(1)}</td>
+          <td class="col-chart" style="color:#9ca3af;font-size:12px;font-style:italic;text-align:center;vertical-align:middle">Aggregate stat</td>`;
+        defTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(defKey)) expandedSections.delete(defKey);
+          else expandedSections.add(defKey);
+          render();
+        });
+        frag.appendChild(defTr);
+
+        if (defExpanded) {
+          const defPlayers = getPlayersForTeam(r.team, 'batter');
+          const defRows = [];
+          for (const p of defPlayers) {
+            const { display, stats } = getEventsForEntity(p, playerPaCount);
+            if (display.length === 0) continue;
+            const s = computeStats(stats, false);
+            const playerDefPlus = s.pa > 0 ? Math.round(100 + (p.def_runs ?? 0) / (curLC.lgRPA * s.pa) * 100) : '–';
+            defRows.push({ ...p, ...s, def_plus: playerDefPlus });
+          }
+          defRows.sort((a, b) => (b.def_runs ?? 0) - (a.def_runs ?? 0));
+          for (const pr of defRows) {
+            const subTr = document.createElement('tr');
+            subTr.classList.add('player-subrow');
+            subTr.innerHTML = `
+              <td class="col-rank"></td>
+              <td class="col-name" title="${pr.name}">${pr.name}</td>
+              <td class="col-team">${pr.team || ''}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.def_plus}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.pa}</td>
+              <td class="col-num">${(pr.def_runs ?? 0).toFixed(1)}</td>
+              <td class="col-chart"></td>`;
+            frag.appendChild(subTr);
           }
         }
       }
