@@ -134,7 +134,8 @@ def compute_bsr(full_df: pd.DataFrame, all_pa: pd.DataFrame) -> dict:
     sb_mask = desc_lower.str.contains("steals", na=False) & ~desc_lower.str.contains("caught", na=False)
     cs_mask = desc_lower.str.contains("caught stealing", na=False)
 
-    runner_events: dict[int, dict] = defaultdict(lambda: {"sb": 0, "cs": 0})
+    runner_counts: dict[int, dict] = defaultdict(lambda: {"sb": 0, "cs": 0})
+    runner_event_rows: dict[int, list] = defaultdict(list)
 
     for mask_series, evt_type in [(sb_mask, "sb"), (cs_mask, "cs")]:
         subset = full_df[mask_series]
@@ -145,13 +146,30 @@ def compute_bsr(full_df: pd.DataFrame, all_pa: pd.DataFrame) -> dict:
         to_3rd = sub_desc.str.contains("3rd|third", na=False, regex=True)
         to_home = sub_desc.str.contains("home|scores", na=False, regex=True)
 
-        for cond, col in [(to_2nd, "on_1b"), (to_3rd, "on_2b"), (to_home, "on_3b")]:
-            ids = subset.loc[cond, col].dropna()
-            for rid, count in ids.value_counts().items():
-                runner_events[int(rid)][evt_type] += int(count)
+        rv = SB_RUN_VALUE if evt_type == "sb" else CS_RUN_VALUE
+        evt_name = "stolen_base" if evt_type == "sb" else "caught_stealing"
 
-    total_sb = sum(v["sb"] for v in runner_events.values())
-    total_cs = sum(v["cs"] for v in runner_events.values())
+        for cond, col in [(to_2nd, "on_1b"), (to_3rd, "on_2b"), (to_home, "on_3b")]:
+            matched = subset[cond]
+            for _, row in matched.iterrows():
+                runner_id = row.get(col)
+                if pd.isna(runner_id):
+                    continue
+                rid = int(runner_id)
+                runner_counts[rid][evt_type] += 1
+                game_date = pd.to_datetime(row["game_date"]).strftime("%Y-%m-%d")
+                home = row.get("home_team", "")
+                away = row.get("away_team", "")
+                topbot = row.get("inning_topbot", "")
+                team = away if topbot == "Top" else home
+                ab_num = int(row["at_bat_number"]) if pd.notna(row.get("at_bat_number")) else 0
+                runner_event_rows[rid].append([
+                    game_date, evt_name, round(rv, 3), ab_num,
+                    team, None, home, None,
+                ])
+
+    total_sb = sum(v["sb"] for v in runner_counts.values())
+    total_cs = sum(v["cs"] for v in runner_counts.values())
     total_pa = len(all_pa)
     lg_wsb_per_pa = (total_sb * SB_RUN_VALUE + total_cs * CS_RUN_VALUE) / total_pa if total_pa else 0
 
@@ -172,8 +190,8 @@ def compute_bsr(full_df: pd.DataFrame, all_pa: pd.DataFrame) -> dict:
         bid = int(bid)
         pa_count = len(group)
 
-        sb = runner_events[bid]["sb"]
-        cs = runner_events[bid]["cs"]
+        sb = runner_counts[bid]["sb"]
+        cs = runner_counts[bid]["cs"]
         wsb = (sb * SB_RUN_VALUE + cs * CS_RUN_VALUE) - (lg_wsb_per_pa * pa_count)
 
         opps = (group["on_1b"].notna() & (group["outs_when_up"] < 2)).sum()
@@ -184,10 +202,12 @@ def compute_bsr(full_df: pd.DataFrame, all_pa: pd.DataFrame) -> dict:
         else:
             wgdp = 0.0
 
+        evts = sorted(runner_event_rows.get(bid, []), key=lambda e: (e[0], e[3]))
         bsr_dict[bid] = {
             "bsr": round(float(wsb + wgdp), 2),
             "sb": int(sb),
             "cs": int(cs),
+            "baserunning_events": evts,
         }
 
     return bsr_dict
@@ -297,6 +317,7 @@ def build_pitcher_json(all_pa: pd.DataFrame) -> list[dict]:
         p["bsr"] = 0.0
         p["sb"] = 0
         p["cs"] = 0
+        p["baserunning_events"] = []
         p["def_runs"] = 0.0
 
     return list(pitchers.values())
@@ -414,6 +435,7 @@ def main():
         p["bsr"] = b.get("bsr", 0.0)
         p["sb"] = b.get("sb", 0)
         p["cs"] = b.get("cs", 0)
+        p["baserunning_events"] = b.get("baserunning_events", [])
         p["def_runs"] = def_data.get(bid, 0.0)
         p["playerType"] = "batter"
 
