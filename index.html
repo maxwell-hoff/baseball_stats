@@ -226,7 +226,6 @@ const HIT_EVENTS = new Set(['single','double','triple','home_run']);
 const WALK_EVENTS = new Set(['walk','intent_walk']);
 const WOBA_DENOM_EXCLUDE = new Set([
   'intent_walk','sac_bunt','sac_bunt_double_play','catcher_interf',
-  'stolen_base','caught_stealing',
 ]);
 const round3 = v => Math.round(v * 1000) / 1000;
 const NOT_BATTED_BALL = new Set([
@@ -515,6 +514,8 @@ function buildTeamRows(mode) {
   for (const t of teams.values()) {
     t.battingEvents.sort(evtSort);
     t.pitchingEvents.sort(evtSort);
+    t.baserunningEvents = t.baserunningEvents.map(e =>
+      [e[0], e[1], round3(curLC.lgwOBA + e[2]), e[3], e[4], e[5], e[6], e[7]]);
     t.baserunningEvents.sort(evtSort);
     t.fieldingEvents = [];
     for (const e of t.pitchingEvents) {
@@ -672,7 +673,8 @@ function render() {
       const { display: fldDisplay, stats: fldStats } = getEventsForEntity(fldEntity, paCount);
       const batRAA = (batS.wrc_plus - 100) / 100 * curLC.lgRPA * batS.pa;
       const pitRAA = (pitS.wrc_plus - 100) / 100 * curLC.lgRPA * pitS.pa;
-      const totalRAA = batRAA + pitRAA + (p.bsr ?? 0) + (p.def_runs ?? 0);
+      const fldRunsFromEvts = fldStats.reduce((s, e) => s + (e[2] - curLC.lgwOBA), 0);
+      const totalRAA = batRAA + pitRAA + (p.bsr ?? 0) + fldRunsFromEvts;
       const totalPA = batS.pa + pitS.pa;
       rows.push({
         ...p, ...batS,
@@ -935,20 +937,22 @@ function render() {
         frag.appendChild(bsrTr);
         canvasMap.set(bsrTr.querySelector('canvas'), {
           _displayEvts: r._bsrDisplayEvts, _statEvts: r._bsrStatEvts,
-          _paCount: r._paCount, isPitcher: false,
+          _paCount: r._paCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
         });
 
         if (bsrExpanded) {
           const bsrPlayers = getPlayersForTeam(r.team, 'batter');
           const bsrPlayerRows = [];
           for (const p of bsrPlayers) {
-            const bsrEvtEntity = { events: p.baserunning_events ?? [] };
+            const bsrEvtsOffset = (p.baserunning_events ?? []).map(e =>
+              [e[0], e[1], round3(curLC.lgwOBA + e[2]), e[3], e[4], e[5], e[6], e[7]]);
+            const bsrEvtEntity = { events: bsrEvtsOffset };
             const { display: bsrD, stats: bsrSt } = getEventsForEntity(bsrEvtEntity, playerPaCount);
             const { display, stats } = getEventsForEntity(p, playerPaCount);
             if (display.length === 0) continue;
             const s = computeStats(stats, false);
             const playerBsrPlus = s.pa > 0 ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * s.pa) * 100) : '–';
-            bsrPlayerRows.push({ ...p, ...s, bsr_plus: playerBsrPlus, _displayEvts: bsrD, _statEvts: bsrSt, _paCount: playerPaCount, isPitcher: false });
+            bsrPlayerRows.push({ ...p, ...s, bsr_plus: playerBsrPlus, _displayEvts: bsrD, _statEvts: bsrSt, _paCount: playerPaCount, isPitcher: false, _runsOffset: curLC.lgwOBA });
           }
           bsrPlayerRows.sort((a, b) => (b.bsr ?? 0) - (a.bsr ?? 0));
           for (const pr of bsrPlayerRows) {
@@ -973,7 +977,11 @@ function render() {
         // ── Fielding section ──
         const defKey = r.team + '-fielding';
         const defExpanded = expandedSections.has(defKey);
-        const defPlus = r.pa > 0 ? Math.round(100 + (r.def_runs ?? 0) / (curLC.lgRPA * r.pa) * 100) : '–';
+        const fldStatEvts = r._fldStatEvts || [];
+        const computedDefRuns = fldStatEvts.reduce((s, e) => s + (e[2] - curLC.lgwOBA), 0);
+        const computedDefRunsRound = Math.round(computedDefRuns * 10) / 10;
+        const fldPA = fldStatEvts.length;
+        const defPlus = fldPA > 0 ? Math.round(100 + computedDefRuns / (curLC.lgRPA * fldPA) * 100) : '–';
         const defTr = document.createElement('tr');
         defTr.classList.add('section-row');
         defTr.innerHTML = `
@@ -984,8 +992,8 @@ function render() {
           <td class="col-num">${defPlus}</td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
-          <td class="col-num">${r.pa}</td>
-          <td class="col-num">${(r.def_runs ?? 0).toFixed(1)}</td>
+          <td class="col-num">${fldPA}</td>
+          <td class="col-num">${computedDefRunsRound.toFixed(1)}</td>
           <td class="col-chart"><canvas></canvas></td>`;
         defTr.addEventListener('click', e => {
           e.stopPropagation();
@@ -996,7 +1004,7 @@ function render() {
         frag.appendChild(defTr);
         canvasMap.set(defTr.querySelector('canvas'), {
           _displayEvts: r._fldDisplayEvts, _statEvts: r._fldStatEvts,
-          _paCount: r._paCount, isPitcher: false,
+          _paCount: r._paCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
         });
 
         if (defExpanded) {
@@ -1085,6 +1093,7 @@ function drawAllCharts() {
     const td = canvas.parentElement;
     const cssW = td.clientWidth - 20;
     const cssH = row.isTeamRow ? 140 : 90;
+    if (cssW <= 0) return;
     const dpr = window.devicePixelRatio || 1;
     canvas.width  = cssW * dpr;
     canvas.height = cssH * dpr;
@@ -1095,7 +1104,7 @@ function drawAllCharts() {
     if (row.isTeamRow) {
       drawTeamChart(ctx, canvas, row, cssW, cssH, row._paCount);
     } else {
-      drawChart(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH, row._paCount, row.isPitcher);
+      drawChart(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH, row._paCount, row.isPitcher, row._runsOffset);
     }
   });
 }
@@ -1112,7 +1121,7 @@ const BAR_STACK_ORDER = [
   'stolen_base',
 ];
 
-function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitcher) {
+function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitcher, runsOffset) {
   const pad = { top: 4, right: 30, bottom: 12, left: 6 };
   const pw = w - pad.left - pad.right;
   const ph = h - pad.top - pad.bottom;
@@ -1197,13 +1206,16 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
 
   // ── render events (scatter or stacked bar) ─────────────────
   const pts = [];
+  const isSparse = runsOffset != null;
   if (chartType === 'bar') {
-    const barW = Math.max(1, Math.min(dayWidthPx * 0.7, 8));
+    const barW = isSparse ? Math.max(4, Math.min(dayWidthPx * 0.9, 12))
+                          : Math.max(1, Math.min(dayWidthPx * 0.7, 8));
     for (const [dateStr, group] of byDate) {
       const t = new Date(dateStr + 'T12:00:00').getTime();
       const cx = xScale(t);
       const positive = group.filter(e => e[2] > 0);
-      if (positive.length === 0) {
+      const negative = group.filter(e => e[2] < 0);
+      if (positive.length === 0 && negative.length === 0) {
         pts.push({ x: cx, y: baseY, r: barW / 2 + 3, evt: 'field_out', date: dateStr, rv: 0 });
         continue;
       }
@@ -1223,6 +1235,16 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
         pts.push({ x: cx, y: segTop + segH / 2, r: barW / 2 + 3, evt, date: dateStr, rv });
         curY = segTop;
       }
+      let curYDown = baseY;
+      for (const e of negative) {
+        const [, evt, rv] = e;
+        const segH = (Math.abs(rv) / yMax) * ph;
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = EVENT_COLORS[evt] || OUT_COLOR;
+        ctx.fillRect(cx - barW / 2, curYDown, barW, segH);
+        pts.push({ x: cx, y: curYDown + segH / 2, r: barW / 2 + 3, evt, date: dateStr, rv });
+        curYDown += segH;
+      }
     }
     ctx.globalAlpha = 1;
   } else {
@@ -1240,11 +1262,13 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
       const [dateStr, evt, rv] = e;
       const t = new Date(dateStr + 'T12:00:00').getTime();
       const x = xScale(t) + xOff;
-      const y = yScale(rv);
+      const rawY = yScale(rv);
+      const y = Math.min(rawY, baseY + 8);
       const isOut = !EVENT_COLORS[evt];
       ctx.globalAlpha = isOut ? 0.45 : 0.8;
       ctx.fillStyle = EVENT_COLORS[evt] || OUT_COLOR;
-      ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI * 2); ctx.fill();
+      const dotR = isSparse ? 3.5 : 1.5;
+      ctx.beginPath(); ctx.arc(x, y, dotR, 0, Math.PI * 2); ctx.fill();
       pts.push({ x, y, r: 5, evt, date: dateStr, rv });
     }
     ctx.globalAlpha = 1;
@@ -1285,7 +1309,7 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
       }
     }
 
-    const minPA = useRolling ? Math.min(paCount, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA;
+    const minPA = isSparse ? 1 : (useRolling ? Math.min(paCount, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA);
     if (win.length >= minPA && wobaDenom > 0) {
       const t = new Date(dateStr + 'T12:00:00').getTime();
       const x = xScale(t);
@@ -1297,11 +1321,13 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
       if (isPitcher) wrcPlus = 200 - wrcPlus;
       linePoints.push({ x, y: yScaleWrc(wrcPlus), wrcPlus, paNum: win.length, date: dateStr });
 
-      const xw2 = xwobaNumer / xwobaDenom;
-      const xWraa = (xw2 - curLC.lgwOBA) / curLC.wOBAScale;
-      let xWrcPlus = ((xWraa + curLC.lgRPA) / curLC.lgRPA) * 100;
-      if (isPitcher) xWrcPlus = 200 - xWrcPlus;
-      xLinePoints.push({ x, y: yScaleWrc(xWrcPlus), xwoba: xw2, xWrcPlus, paNum: win.length, date: dateStr });
+      if (!isSparse) {
+        const xw2 = xwobaNumer / xwobaDenom;
+        const xWraa = (xw2 - curLC.lgwOBA) / curLC.wOBAScale;
+        let xWrcPlus = ((xWraa + curLC.lgRPA) / curLC.lgRPA) * 100;
+        if (isPitcher) xWrcPlus = 200 - xWrcPlus;
+        xLinePoints.push({ x, y: yScaleWrc(xWrcPlus), xwoba: xw2, xWrcPlus, paNum: win.length, date: dateStr });
+      }
     }
   }
 
@@ -1309,7 +1335,7 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
     ctx.beginPath();
     ctx.moveTo(linePoints[0].x, linePoints[0].y);
     for (let i = 1; i < linePoints.length; i++) ctx.lineTo(linePoints[i].x, linePoints[i].y);
-    ctx.strokeStyle = WRC_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.7;
+    ctx.strokeStyle = WRC_LINE_COLOR; ctx.lineWidth = isSparse ? 2 : 1.5; ctx.globalAlpha = 0.7;
     ctx.stroke(); ctx.globalAlpha = 1;
   }
   if (xLinePoints.length > 1) {
@@ -1605,16 +1631,4 @@ document.addEventListener('mousemove', e => {
         `${bestLine.date}${windowLabel}`;
     }
   } else {
-    tooltip.style.opacity = 0;
-  }
-});
-
-/* ── Resize handler ──────────────────────────────────────────── */
-let resizeTimer;
-window.addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (DATA) render(); }, 150);
-});
-</script>
-</body>
-</html>
+    toolt
