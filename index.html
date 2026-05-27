@@ -1022,18 +1022,17 @@ function applyZoom() {
   const chartTds = document.querySelectorAll('td.col-chart');
   if (chartZoom === 1) {
     chartTh.style.minWidth = '';
-    chartTds.forEach(td => { td.style.minWidth = ''; td.querySelector('canvas').style.width = '100%'; });
+    chartTds.forEach(td => { td.style.minWidth = ''; const c = td.querySelector('canvas'); if (c) c.style.width = '100%'; });
   } else {
-    // Measure one cell's natural 1x width
     chartTh.style.minWidth = '';
-    chartTds.forEach(td => { td.style.minWidth = ''; td.querySelector('canvas').style.width = '100%'; });
+    chartTds.forEach(td => { td.style.minWidth = ''; const c = td.querySelector('canvas'); if (c) c.style.width = '100%'; });
     const base = (chartTds[0]?.clientWidth || 600) - 20;
     const zoomedW = base * chartZoom;
     const zoomedColW = (zoomedW + 20) + 'px';
     chartTh.style.minWidth = zoomedColW;
     chartTds.forEach(td => {
       td.style.minWidth = zoomedColW;
-      td.querySelector('canvas').style.width = zoomedW + 'px';
+      const c = td.querySelector('canvas'); if (c) c.style.width = zoomedW + 'px';
     });
   }
   drawAllCharts();
