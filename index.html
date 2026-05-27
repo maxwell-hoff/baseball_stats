@@ -1008,16 +1008,27 @@ function render() {
         });
 
         if (defExpanded) {
+          const teamFldEvts = r._fldDisplayEvts || [];
+          const teamFldDates = new Set(teamFldEvts.map(e => e[0]));
           const defPlayers = getPlayersForTeam(r.team, 'batter');
           const defPlayerRows = [];
           for (const p of defPlayers) {
             const { display, stats } = getEventsForEntity(p, playerPaCount);
             if (display.length === 0) continue;
             const s = computeStats(stats, false);
-            const playerDefPlus = s.pa > 0 ? Math.round(100 + (p.def_runs ?? 0) / (curLC.lgRPA * s.pa) * 100) : '–';
-            defPlayerRows.push({ ...p, ...s, def_plus: playerDefPlus });
+            const playerDates = new Set(display.map(e => e[0]));
+            const playerFldEvts = teamFldEvts.filter(e => playerDates.has(e[0]));
+            const playerFldRuns = playerFldEvts.reduce((sum, e) => sum + (e[2] - curLC.lgwOBA), 0);
+            const playerFldRunsRd = Math.round(playerFldRuns * 10) / 10;
+            const playerDefPlus = playerFldEvts.length > 0
+              ? Math.round(100 + playerFldRuns / (curLC.lgRPA * playerFldEvts.length) * 100) : '–';
+            defPlayerRows.push({
+              ...p, ...s, def_plus: playerDefPlus, def_runs_computed: playerFldRunsRd,
+              _displayEvts: playerFldEvts, _statEvts: playerFldEvts,
+              _paCount: playerPaCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
+            });
           }
-          defPlayerRows.sort((a, b) => (b.def_runs ?? 0) - (a.def_runs ?? 0));
+          defPlayerRows.sort((a, b) => (b.def_runs_computed ?? 0) - (a.def_runs_computed ?? 0));
           for (const pr of defPlayerRows) {
             const subTr = document.createElement('tr');
             subTr.classList.add('player-subrow');
@@ -1030,9 +1041,10 @@ function render() {
               <td class="col-num">–</td>
               <td class="col-num">–</td>
               <td class="col-num">${pr.pa}</td>
-              <td class="col-num">${(pr.def_runs ?? 0).toFixed(1)}</td>
-              <td class="col-chart"></td>`;
+              <td class="col-num">${pr.def_runs_computed.toFixed(1)}</td>
+              <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
+            canvasMap.set(subTr.querySelector('canvas'), pr);
           }
         }
       }
@@ -1631,4 +1643,16 @@ document.addEventListener('mousemove', e => {
         `${bestLine.date}${windowLabel}`;
     }
   } else {
-    toolt
+    tooltip.style.opacity = 0;
+  }
+});
+
+/* ── Resize handler ──────────────────────────────────────────── */
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (DATA) render(); }, 150);
+});
+</script>
+</body>
+</html>
