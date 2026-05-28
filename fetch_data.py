@@ -240,6 +240,9 @@ def build_player_json(all_pa: pd.DataFrame) -> tuple[list[dict], dict[str, int]]
         team = row.away_team if row.inning_topbot == "Top" else row.home_team
         xw = row.estimated_woba_using_speedangle
         stand = row.stand if hasattr(row, "stand") and pd.notna(row.stand) else None
+        bs = getattr(row, "bat_score", None)
+        pbs = getattr(row, "post_bat_score", None)
+        actual_r = int(pbs - bs) if pd.notna(bs) and pd.notna(pbs) else 0
         p["events"].append([
             row.game_date_str,   # [0]
             row.events,          # [1]
@@ -249,6 +252,7 @@ def build_player_json(all_pa: pd.DataFrame) -> tuple[list[dict], dict[str, int]]
             round(xw, 3) if pd.notna(xw) else None,  # [5] xwOBA
             row.home_team,       # [6] stadium (home team of game)
             stand,               # [7] batter handedness (L/R)
+            actual_r,            # [8] actual runs scored on this PA
         ])
 
         if row.game_date_str >= p["_last_date"]:
@@ -295,6 +299,9 @@ def build_pitcher_json(all_pa: pd.DataFrame) -> list[dict]:
         team = row.home_team if row.inning_topbot == "Top" else row.away_team
         xw = row.estimated_woba_using_speedangle
         stand = row.stand if hasattr(row, "stand") and pd.notna(row.stand) else None
+        bs = getattr(row, "bat_score", None)
+        pbs = getattr(row, "post_bat_score", None)
+        actual_r = int(pbs - bs) if pd.notna(bs) and pd.notna(pbs) else 0
         p["events"].append([
             row.game_date_str,
             row.events,
@@ -304,6 +311,7 @@ def build_pitcher_json(all_pa: pd.DataFrame) -> list[dict]:
             round(xw, 3) if pd.notna(xw) else None,
             row.home_team,
             stand,
+            actual_r,            # [8] actual runs scored on this PA (allowed by pitcher)
         ])
 
         if row.game_date_str >= p["_last_date"]:
