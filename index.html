@@ -187,7 +187,8 @@
         <th class="col-num" data-key="owrc_plus">oWRC+ <span class="arrow"></span></th>
         <th class="col-num" data-key="xwoba">xwOBA <span class="arrow"></span></th>
         <th class="col-num" data-key="pa">PA <span class="arrow"></span></th>
-        <th class="col-num" data-key="bsr">BsR <span class="arrow"></span></th>
+        <th class="col-num" data-key="bsr_plus">BsR+ <span class="arrow"></span></th>
+        <th class="col-num" data-key="def_plus">Def+ <span class="arrow"></span></th>
         <th class="col-chart">Plate Appearance Run Values</th>
       </tr>
     </thead>
@@ -220,6 +221,8 @@ const WRC_PLUS_MAX = 250;
 const WRC_LINE_COLOR = '#6366f1';
 const OWRC_LINE_COLOR = '#e11d48';
 const XWOBA_LINE_COLOR = '#14b8a6';
+const BSR_BAR_COLOR = '#10b981';
+const DEF_BAR_COLOR = '#f59e0b';
 const WRC_LINE_MIN_PA = 10;
 
 const HIT_EVENTS = new Set(['single','double','triple','home_run']);
@@ -290,7 +293,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     DATA = await resp.json();
   } catch (e) {
     document.getElementById('tbody').innerHTML =
-      `<tr><td colspan="10" class="msg error">
+      `<tr><td colspan="11" class="msg error">
          Could not load data/player_data.json — run <code>python fetch_data.py</code> first.
        </td></tr>`;
     return;
@@ -676,9 +679,14 @@ function render() {
       const fldRunsFromEvts = fldStats.reduce((s, e) => s + (e[2] - curLC.lgwOBA), 0);
       const totalRAA = batRAA + pitRAA + (p.bsr ?? 0) + fldRunsFromEvts;
       const totalPA = batS.pa + pitS.pa;
+      const teamBsrPlus = batS.pa > 0 ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * batS.pa) * 100) : null;
+      const teamDefPlus = fldStats.length > 0 ? Math.round(100 + fldRunsFromEvts / (curLC.lgRPA * fldStats.length) * 100) : null;
       rows.push({
         ...p, ...batS,
         owrc_plus: pitS.wrc_plus,
+        bsr_plus: teamBsrPlus,
+        def_plus: teamDefPlus,
+        fld_runs: Math.round(fldRunsFromEvts * 10) / 10,
         net_wrc_plus: totalPA > 0
           ? Math.round(100 + totalRAA / (curLC.lgRPA * totalPA) * 100)
           : null,
@@ -713,10 +721,13 @@ function render() {
         if (s.pa < minPA) continue;
       }
       if (q && !p.name.toLowerCase().includes(q)) continue;
+      const playerBsrP = (!isPitcher && s.pa > 0) ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * s.pa) * 100) : null;
       rows.push({
         ...p, ...s,
         wrc_plus: isPitcher ? null : s.wrc_plus,
         owrc_plus: isPitcher ? s.wrc_plus : null,
+        bsr_plus: playerBsrP,
+        def_plus: null,
         _displayEvts: display, _statEvts: stats, _paCount: paCount, isPitcher,
       });
       for (const [d] of display) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
@@ -727,15 +738,33 @@ function render() {
 
   let maxGameRV = Y_MAX_DEFAULT;
   for (const r of rows) {
-    const evts = r.isTeamRow ? [...(r._battingDisplayEvts || []), ...(r._pitchingDisplayEvts || [])] : r._displayEvts;
-    const byDate = new Map();
-    for (const e of evts) {
-      const d = e[0];
-      if (!byDate.has(d)) byDate.set(d, 0);
-      if (e[2] > 0) byDate.set(d, byDate.get(d) + e[2]);
-    }
-    for (const total of byDate.values()) {
-      if (total > maxGameRV) maxGameRV = total;
+    if (r.isTeamRow) {
+      const byDate = new Map();
+      for (const e of (r._battingDisplayEvts || [])) {
+        if (e[2] > 0) byDate.set(e[0], (byDate.get(e[0]) || 0) + e[2]);
+      }
+      for (const e of (r._pitchingDisplayEvts || [])) {
+        if (e[2] > 0) byDate.set(e[0], (byDate.get(e[0]) || 0) + e[2]);
+      }
+      for (const e of (r._bsrDisplayEvts || [])) {
+        const rv = e[2] - curLC.lgwOBA;
+        if (rv > 0) byDate.set(e[0], (byDate.get(e[0]) || 0) + rv);
+      }
+      for (const e of (r._fldDisplayEvts || [])) {
+        const rv = e[2] - curLC.lgwOBA;
+        if (rv > 0) byDate.set(e[0], (byDate.get(e[0]) || 0) + rv);
+      }
+      for (const total of byDate.values()) {
+        if (total > maxGameRV) maxGameRV = total;
+      }
+    } else {
+      const byDate = new Map();
+      for (const e of (r._displayEvts || [])) {
+        if (e[2] > 0) byDate.set(e[0], (byDate.get(e[0]) || 0) + e[2]);
+      }
+      for (const total of byDate.values()) {
+        if (total > maxGameRV) maxGameRV = total;
+      }
     }
   }
   yMax = maxGameRV * 1.05;
@@ -786,7 +815,8 @@ function render() {
         <td class="col-num">${r.owrc_plus ?? '–'}</td>
         <td class="col-num">${r.xwoba.toFixed(3)}</td>
         <td class="col-num">${r.pa}</td>
-        <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
+        <td class="col-num">${r.bsr_plus ?? '–'}</td>
+        <td class="col-num">${r.def_plus ?? '–'}</td>
         <td class="col-chart"><canvas></canvas></td>`;
       tr.addEventListener('click', () => {
         if (expandedTeams.has(r.team)) expandedTeams.delete(r.team);
@@ -811,7 +841,8 @@ function render() {
           <td class="col-num">–</td>
           <td class="col-num">${r.xwoba.toFixed(3)}</td>
           <td class="col-num">${r.pa}</td>
-          <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
           <td class="col-chart"><canvas></canvas></td>`;
         hitTr.addEventListener('click', e => {
           e.stopPropagation();
@@ -847,7 +878,8 @@ function render() {
               <td class="col-num">–</td>
               <td class="col-num">${pr.xwoba.toFixed(3)}</td>
               <td class="col-num">${pr.pa}</td>
-              <td class="col-num">${(pr.bsr ?? 0).toFixed(1)}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
               <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
             canvasMap.set(subTr.querySelector('canvas'), pr);
@@ -868,6 +900,7 @@ function render() {
           <td class="col-num">${r.owrc_plus ?? '–'}</td>
           <td class="col-num">${r.pitching_xwoba?.toFixed(3) ?? '–'}</td>
           <td class="col-num">${r.pitching_pa ?? 0}</td>
+          <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-chart"><canvas></canvas></td>`;
         pitTr.addEventListener('click', e => {
@@ -905,6 +938,7 @@ function render() {
               <td class="col-num">${pr.xwoba.toFixed(3)}</td>
               <td class="col-num">${pr.pa}</td>
               <td class="col-num">–</td>
+              <td class="col-num">–</td>
               <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
             canvasMap.set(subTr.querySelector('canvas'), pr);
@@ -926,7 +960,8 @@ function render() {
           <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${r.pa}</td>
-          <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
+          <td class="col-num">${bsrPlus}</td>
+          <td class="col-num">–</td>
           <td class="col-chart"><canvas></canvas></td>`;
         bsrTr.addEventListener('click', e => {
           e.stopPropagation();
@@ -967,7 +1002,8 @@ function render() {
               <td class="col-num">–</td>
               <td class="col-num">–</td>
               <td class="col-num">${pr.pa}</td>
-              <td class="col-num">${(pr.bsr ?? 0).toFixed(1)}</td>
+              <td class="col-num">${pr.bsr_plus}</td>
+              <td class="col-num">–</td>
               <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
             canvasMap.set(subTr.querySelector('canvas'), pr);
@@ -993,7 +1029,8 @@ function render() {
           <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${fldPA}</td>
-          <td class="col-num">${computedDefRunsRound.toFixed(1)}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${defPlus}</td>
           <td class="col-chart"><canvas></canvas></td>`;
         defTr.addEventListener('click', e => {
           e.stopPropagation();
@@ -1041,7 +1078,8 @@ function render() {
               <td class="col-num">–</td>
               <td class="col-num">–</td>
               <td class="col-num">${pr.pa}</td>
-              <td class="col-num">${pr.def_runs_computed.toFixed(1)}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.def_plus}</td>
               <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
             canvasMap.set(subTr.querySelector('canvas'), pr);
@@ -1061,7 +1099,8 @@ function render() {
         <td class="col-num">${r.owrc_plus ?? '–'}</td>
         <td class="col-num">${r.xwoba.toFixed(3)}</td>
         <td class="col-num">${r.pa}</td>
-        <td class="col-num">${r.isPitcher ? '–' : (r.bsr ?? 0).toFixed(1)}</td>
+        <td class="col-num">${r.bsr_plus ?? '–'}</td>
+        <td class="col-num">${r.def_plus ?? '–'}</td>
         <td class="col-chart"><canvas></canvas></td>`;
       frag.appendChild(tr);
       canvasMap.set(tr.querySelector('canvas'), r);
@@ -1430,7 +1469,9 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     }
   }
 
-  // ── stacked bars: hitting + pitching upward from baseline ──
+  // ── stacked bars: all four components upward from baseline ──
+  const bsrDisplay = row._bsrDisplayEvts || [];
+  const fldDisplay = row._fldDisplayEvts || [];
   const yScale = v => pad.top + ph - (v / yMax) * ph;
   const baseY = yScale(0);
 
@@ -1439,33 +1480,44 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     for (const e of events) { if (e[2] > 0) m.set(e[0], (m.get(e[0]) || 0) + e[2]); }
     return m;
   }
+  function sumByDateOffset(events, offset) {
+    const m = new Map();
+    for (const e of events) {
+      const rv = e[2] - offset;
+      if (rv > 0) m.set(e[0], (m.get(e[0]) || 0) + rv);
+    }
+    return m;
+  }
   const batSums = sumByDate(batDisplay);
   const pitSums = sumByDate(pitDisplay);
-  const allBarDates = new Set([...batSums.keys(), ...pitSums.keys()]);
+  const bsrSums = sumByDateOffset(bsrDisplay, curLC.lgwOBA);
+  const fldSums = sumByDateOffset(fldDisplay, curLC.lgwOBA);
+  const allBarDates = new Set([...batSums.keys(), ...pitSums.keys(), ...bsrSums.keys(), ...fldSums.keys()]);
 
   const pts = [];
   const barW = Math.max(1, Math.min(dayWidthPx * 0.7, 8));
+
+  const barLayers = [
+    { sums: fldSums, color: DEF_BAR_COLOR, alpha: 0.55, evt: 'fielding', side: 'fld' },
+    { sums: pitSums, color: OWRC_LINE_COLOR, alpha: 0.55, evt: 'pitching', side: 'pit' },
+    { sums: bsrSums, color: BSR_BAR_COLOR, alpha: 0.6, evt: 'baserunning', side: 'bsr' },
+    { sums: batSums, color: WRC_LINE_COLOR, alpha: 0.7, evt: 'hitting', side: 'bat' },
+  ];
 
   for (const dateStr of allBarDates) {
     const t = new Date(dateStr + 'T12:00:00').getTime();
     const cx = xScale(t);
     let curY = baseY;
-    const pitRV = pitSums.get(dateStr) || 0;
-    if (pitRV > 0) {
-      const segH = (pitRV / yMax) * ph;
-      ctx.globalAlpha = 0.55;
-      ctx.fillStyle = OWRC_LINE_COLOR;
-      ctx.fillRect(cx - barW / 2, curY - segH, barW, segH);
-      pts.push({ x: cx, y: curY - segH / 2, r: barW / 2 + 3, evt: 'pitching', date: dateStr, rv: pitRV, side: 'pit' });
-      curY -= segH;
-    }
-    const batRV = batSums.get(dateStr) || 0;
-    if (batRV > 0) {
-      const segH = (batRV / yMax) * ph;
-      ctx.globalAlpha = 0.7;
-      ctx.fillStyle = WRC_LINE_COLOR;
-      ctx.fillRect(cx - barW / 2, curY - segH, barW, segH);
-      pts.push({ x: cx, y: curY - segH / 2, r: barW / 2 + 3, evt: 'hitting', date: dateStr, rv: batRV, side: 'bat' });
+    for (const layer of barLayers) {
+      const rv = layer.sums.get(dateStr) || 0;
+      if (rv > 0) {
+        const segH = (rv / yMax) * ph;
+        ctx.globalAlpha = layer.alpha;
+        ctx.fillStyle = layer.color;
+        ctx.fillRect(cx - barW / 2, curY - segH, barW, segH);
+        pts.push({ x: cx, y: curY - segH / 2, r: barW / 2 + 3, evt: layer.evt, date: dateStr, rv, side: layer.side });
+        curY -= segH;
+      }
     }
   }
   ctx.globalAlpha = 1;
@@ -1525,10 +1577,15 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
 
   // ── legend ──
   ctx.font = '8px sans-serif'; ctx.globalAlpha = 0.6; ctx.textAlign = 'right';
-  ctx.fillStyle = WRC_LINE_COLOR;
-  ctx.fillText('— wRC+', w - pad.right - 2, pad.top + 10);
-  ctx.fillStyle = OWRC_LINE_COLOR;
-  ctx.fillText('— oWRC+', w - pad.right - 2, pad.top + 20);
+  const legendX = w - pad.right - 2;
+  const legendItems = [
+    [WRC_LINE_COLOR, 'Hitting'], [OWRC_LINE_COLOR, 'Pitching'],
+    [BSR_BAR_COLOR, 'Baserun'], [DEF_BAR_COLOR, 'Fielding'],
+  ];
+  legendItems.forEach(([c, label], i) => {
+    ctx.fillStyle = c;
+    ctx.fillText('■ ' + label, legendX, pad.top + 10 + i * 10);
+  });
   ctx.globalAlpha = 1;
 
   pointsMap.set(canvas, pts);
@@ -1592,6 +1649,8 @@ document.addEventListener('mousemove', e => {
     tooltip.style.top  = (e.clientY - 10) + 'px';
     const evtLabel = best.evt === 'hitting' ? 'Hitting'
       : best.evt === 'pitching' ? 'Pitching'
+      : best.evt === 'baserunning' ? 'Baserunning'
+      : best.evt === 'fielding' ? 'Fielding'
       : best.side === 'pit' ? `${PRETTY[best.evt] || best.evt} (allowed)`
       : (PRETTY[best.evt] || best.evt);
     tooltip.innerHTML = `<strong>${evtLabel}</strong><br>` +
