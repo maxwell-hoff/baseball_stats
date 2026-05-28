@@ -1430,21 +1430,26 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
   let wobaNumer = 0, wobaDenom = 0;
   let xwobaNumer = 0, xwobaDenom = 0;
   let pfSum = 0, pfCount = 0;
+  let actualRunsAcc = 0, actualPA = 0;
   const win = [];
   const linePoints = [];
   const xLinePoints = [];
+  const runsLinePoints = [];
 
   for (const e of chronological) {
     const [dateStr, evt, rv, , , xw, stadium, hand] = e;
     const inDenom = !WOBA_DENOM_EXCLUDE.has(evt);
     const xVal = (xw != null && inDenom) ? xw : (inDenom ? rv : 0);
     const pf = getParkFactor(stadium, hand);
-    win.push({ rv, inDenom, xVal, pf });
+    const ar = e[8] || 0;
+    win.push({ rv, inDenom, xVal, pf, ar });
     wobaNumer += rv;
     xwobaNumer += xVal;
     if (inDenom) { wobaDenom++; xwobaDenom++; }
     pfSum += pf;
     pfCount++;
+    actualRunsAcc += ar;
+    actualPA++;
 
     if (useRolling) {
       while (win.length > paCount) {
@@ -1454,6 +1459,8 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
         if (old.inDenom) { wobaDenom--; xwobaDenom--; }
         pfSum -= old.pf;
         pfCount--;
+        actualRunsAcc -= old.ar;
+        actualPA--;
       }
     }
 
@@ -1476,6 +1483,14 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
         if (isPitcher) xWrcPlus = 200 - xWrcPlus;
         xLinePoints.push({ x, y: yScaleWrc(xWrcPlus), xwoba: xw2, xWrcPlus, paNum: win.length, date: dateStr });
       }
+
+      // Actual runs line (R scored for batters, R allowed for pitchers → 100 scale)
+      if (actualPA > 0) {
+        const rAboveAvg = actualRunsAcc - curLC.lgRPA * actualPA;
+        let runsPlus = 100 + rAboveAvg / (curLC.lgRPA * actualPA) * 100;
+        if (isPitcher) runsPlus = 200 - runsPlus;
+        runsLinePoints.push({ x, y: yScaleWrc(runsPlus), wrcPlus: runsPlus, paNum: win.length, date: dateStr, type: 'runs' });
+      }
     }
   }
 
@@ -1494,10 +1509,18 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
     ctx.setLineDash([4, 3]);
     ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
+  if (runsLinePoints.length > 1) {
+    ctx.beginPath();
+    ctx.moveTo(runsLinePoints[0].x, runsLinePoints[0].y);
+    for (let i = 1; i < runsLinePoints.length; i++) ctx.lineTo(runsLinePoints[i].x, runsLinePoints[i].y);
+    ctx.strokeStyle = '#f97316'; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.6;
+    ctx.setLineDash([6, 3]);
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
 
   pointsMap.set(canvas, pts);
   lineMap.set(canvas, linePoints);
-  xLineMap.set(canvas, xLinePoints);
+  xLineMap.set(canvas, [...xLinePoints, ...runsLinePoints]);
 }
 
 /* ================================================================
@@ -1827,6 +1850,10 @@ document.addEventListener('mousemove', e => {
         `${bestLine.date}${windowLabel}`;
     } else if (bestLine.type === 'net-runs') {
       tooltip.innerHTML = `<strong>Net Runs+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'runs') {
+      const rLabel = isPitcherRow ? 'RA+' : 'R+';
+      tooltip.innerHTML = `<strong>${rLabel} ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     } else if (bestLine.type === 'bat-wrc') {
       tooltip.innerHTML = `<strong>wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
