@@ -531,12 +531,19 @@ function buildTeamRows(mode) {
     t.baserunningEvents = t.baserunningEvents.map(e =>
       [e[0], e[1], round3(curLC.lgwOBA + e[2]), e[3], e[4], e[5], e[6], e[7]]);
     t.baserunningEvents.sort(evtSort);
-    t.fieldingEvents = [];
+    // Aggregate fielding proxy (xwOBA - actual rv) into one event per game date
+    const fldByDate = new Map();
     for (const e of t.pitchingEvents) {
       const [date, evt, rv, abNum, team, xw, stadium, hand] = e;
       if (NOT_BATTED_BALL.has(evt) || xw == null) continue;
-      const fldRv = round3(curLC.lgwOBA + (xw - rv));
-      t.fieldingEvents.push([date, evt, fldRv, abNum, team, null, stadium, hand]);
+      const delta = xw - rv;
+      const cur = fldByDate.get(date);
+      if (cur) { cur.sum += delta; cur.count++; }
+      else fldByDate.set(date, { sum: delta, count: 1, abNum, team, stadium, hand });
+    }
+    t.fieldingEvents = [];
+    for (const [date, g] of fldByDate) {
+      t.fieldingEvents.push([date, 'fielding', round3(curLC.lgwOBA + g.sum), g.abNum, g.team, null, g.stadium, g.hand]);
     }
     t.fieldingEvents.sort(evtSort);
     t.events = t.battingEvents;
