@@ -1382,19 +1382,17 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     return pad.top + ph - ((clamped - WRC_PLUS_MIN) / (WRC_PLUS_MAX - WRC_PLUS_MIN)) * ph;
   };
 
-  const midY = yScaleWrc(100);
-  const halfUp = midY - pad.top;
-  const halfDown = (pad.top + ph) - midY;
-
   const MS_PER_DAY = 86400000;
   const sampleT = compressedX.ticks.length > 1 ? compressedX.ticks[0] : Date.now();
   const dayWidthPx = Math.abs(xScale(sampleT + MS_PER_DAY) - xScale(sampleT));
 
-  // ── midline at 100 wRC+ ──
-  ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(pad.left, midY); ctx.lineTo(w - pad.right, midY); ctx.stroke();
+  // ── 100 wRC+ reference line ──
+  const y100 = yScaleWrc(100);
+  ctx.strokeStyle = '#c7c7cc'; ctx.lineWidth = 0.5; ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(pad.left, y100); ctx.lineTo(w - pad.right, y100); ctx.stroke();
+  ctx.setLineDash([]);
   ctx.fillStyle = '#9ca3af'; ctx.font = '8px sans-serif'; ctx.textAlign = 'left';
-  ctx.fillText('100', w - pad.right + 3, midY + 3);
+  ctx.fillText('100', w - pad.right + 3, y100 + 3);
 
   // ── season breaks ──
   for (const brk of compressedX.breaks) {
@@ -1432,7 +1430,10 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     }
   }
 
-  // ── sum positive run values per date (single bar per date) ──
+  // ── stacked bars: hitting + pitching upward from baseline ──
+  const yScale = v => pad.top + ph - (v / yMax) * ph;
+  const baseY = yScale(0);
+
   function sumByDate(events) {
     const m = new Map();
     for (const e of events) { if (e[2] > 0) m.set(e[0], (m.get(e[0]) || 0) + e[2]); }
@@ -1440,50 +1441,51 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   }
   const batSums = sumByDate(batDisplay);
   const pitSums = sumByDate(pitDisplay);
+  const allBarDates = new Set([...batSums.keys(), ...pitSums.keys()]);
 
   const pts = [];
   const barW = Math.max(1, Math.min(dayWidthPx * 0.7, 8));
 
-  // ── batting bars (up from midline, single color) ──
-  for (const [dateStr, totalRV] of batSums) {
+  for (const dateStr of allBarDates) {
     const t = new Date(dateStr + 'T12:00:00').getTime();
     const cx = xScale(t);
-    const segH = (totalRV / yMax) * halfUp;
-    ctx.globalAlpha = 0.7;
-    ctx.fillStyle = WRC_LINE_COLOR;
-    ctx.fillRect(cx - barW / 2, midY - segH, barW, segH);
-    pts.push({ x: cx, y: midY - segH / 2, r: barW / 2 + 3, evt: 'hitting', date: dateStr, rv: totalRV, side: 'bat' });
-  }
-
-  // ── pitching bars (down from midline, single color) ──
-  for (const [dateStr, totalRV] of pitSums) {
-    const t = new Date(dateStr + 'T12:00:00').getTime();
-    const cx = xScale(t);
-    const segH = (totalRV / yMax) * halfDown;
-    ctx.globalAlpha = 0.45;
-    ctx.fillStyle = OWRC_LINE_COLOR;
-    ctx.fillRect(cx - barW / 2, midY, barW, segH);
-    pts.push({ x: cx, y: midY + segH / 2, r: barW / 2 + 3, evt: 'pitching', date: dateStr, rv: totalRV, side: 'pit' });
+    let curY = baseY;
+    const pitRV = pitSums.get(dateStr) || 0;
+    if (pitRV > 0) {
+      const segH = (pitRV / yMax) * ph;
+      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = OWRC_LINE_COLOR;
+      ctx.fillRect(cx - barW / 2, curY - segH, barW, segH);
+      pts.push({ x: cx, y: curY - segH / 2, r: barW / 2 + 3, evt: 'pitching', date: dateStr, rv: pitRV, side: 'pit' });
+      curY -= segH;
+    }
+    const batRV = batSums.get(dateStr) || 0;
+    if (batRV > 0) {
+      const segH = (batRV / yMax) * ph;
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = WRC_LINE_COLOR;
+      ctx.fillRect(cx - barW / 2, curY - segH, barW, segH);
+      pts.push({ x: cx, y: curY - segH / 2, r: barW / 2 + 3, evt: 'hitting', date: dateStr, rv: batRV, side: 'bat' });
+    }
   }
   ctx.globalAlpha = 1;
 
-  // ── compute running lines (wRC+ and xwRC+) for each side ──
-  function computeRunningLine(events, invert) {
+  // ── compute running wRC+ line for a set of events ──
+  function computeRunningLine(events) {
     const useRolling = viewMode === 'pa';
     const chron = [...events].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
-    let wN = 0, wD = 0, xN = 0, xD = 0, pS = 0, pC = 0;
+    let wN = 0, wD = 0, pS = 0, pC = 0;
     const win = [], points = [];
     for (const e of chron) {
-      const [dateStr, evt, rv, , , xw, stadium, hand] = e;
+      const [dateStr, evt, rv, , , , stadium, hand] = e;
       const inD = !WOBA_DENOM_EXCLUDE.has(evt);
-      const xVal = (xw != null && inD) ? xw : (inD ? rv : 0);
       const pf = getParkFactor(stadium, hand);
-      win.push({ rv, inD, xVal, pf });
-      wN += rv; xN += xVal; if (inD) { wD++; xD++; } pS += pf; pC++;
+      win.push({ rv, inD, pf });
+      wN += rv; if (inD) wD++; pS += pf; pC++;
       if (useRolling) {
         while (win.length > paCount) {
           const old = win.shift();
-          wN -= old.rv; xN -= old.xVal; if (old.inD) { wD--; xD--; } pS -= old.pf; pC--;
+          wN -= old.rv; if (old.inD) wD--; pS -= old.pf; pC--;
         }
       }
       const minP = useRolling ? Math.min(paCount, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA;
@@ -1493,70 +1495,45 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
         const meanPF = pC > 0 ? pS / pC : 1.0;
         const woba = wN / wD;
         const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
-        let wrcPlus = ((wraaPerPa + curLC.lgRPA + (curLC.lgRPA - meanPF * curLC.lgRPA)) / curLC.lgRPA) * 100;
-        if (invert) wrcPlus = 200 - wrcPlus;
-        let xWrcPlus = null;
-        if (xD > 0) {
-          const xw2 = xN / xD;
-          const xWraa = (xw2 - curLC.lgwOBA) / curLC.wOBAScale;
-          xWrcPlus = ((xWraa + curLC.lgRPA) / curLC.lgRPA) * 100;
-          if (invert) xWrcPlus = 200 - xWrcPlus;
-        }
-        points.push({ x, date: dateStr, wrcPlus, xWrcPlus, paNum: win.length });
+        const wrcPlus = ((wraaPerPa + curLC.lgRPA + (curLC.lgRPA - meanPF * curLC.lgRPA)) / curLC.lgRPA) * 100;
+        points.push({ x, date: dateStr, wrcPlus, paNum: win.length });
       }
     }
     return points;
   }
 
-  const batLine = computeRunningLine(viewMode === 'pa' ? batDisplay : batStats, false);
-  const pitLine = computeRunningLine(viewMode === 'pa' ? pitDisplay : pitStats, true);
+  const batLine = computeRunningLine(viewMode === 'pa' ? batDisplay : batStats);
+  const pitLine = computeRunningLine(viewMode === 'pa' ? pitDisplay : pitStats);
 
-  // ── merge into net wRC+ and net xwRC+ lines ──
-  const batByDate2 = new Map(); for (const p of batLine) batByDate2.set(p.date, p);
-  const pitByDate2 = new Map(); for (const p of pitLine) pitByDate2.set(p.date, p);
-  const allLineDates = [...new Set([...batLine.map(p => p.date), ...pitLine.map(p => p.date)])].sort();
-
-  let lastBat = null, lastPit = null;
-  const netWrcLine = [], netXwrcLine = [];
-  for (const date of allLineDates) {
-    if (batByDate2.has(date)) lastBat = batByDate2.get(date);
-    if (pitByDate2.has(date)) lastPit = pitByDate2.get(date);
-    if (!lastBat || !lastPit) continue;
-    const x = (batByDate2.has(date) ? batByDate2.get(date) : pitByDate2.get(date)).x;
-    const totalPA = lastBat.paNum + lastPit.paNum;
-    const netWrc = (lastBat.wrcPlus + lastPit.wrcPlus) / 2;
-    netWrcLine.push({ x, y: yScaleWrc(netWrc), wrcPlus: netWrc, paNum: totalPA, date });
-    if (lastBat.xWrcPlus != null && lastPit.xWrcPlus != null) {
-      const netXwrc = (lastBat.xWrcPlus + lastPit.xWrcPlus) / 2;
-      netXwrcLine.push({ x, y: yScaleWrc(netXwrc), xWrcPlus: netXwrc, paNum: totalPA, date });
-    }
-  }
-
-  if (netWrcLine.length > 1) {
-    ctx.beginPath(); ctx.moveTo(netWrcLine[0].x, netWrcLine[0].y);
-    for (let i = 1; i < netWrcLine.length; i++) ctx.lineTo(netWrcLine[i].x, netWrcLine[i].y);
+  // ── draw hitting wRC+ line (solid indigo) ──
+  const batLinePts = batLine.map(p => ({ ...p, y: yScaleWrc(p.wrcPlus), type: 'bat-wrc' }));
+  if (batLinePts.length > 1) {
+    ctx.beginPath(); ctx.moveTo(batLinePts[0].x, batLinePts[0].y);
+    for (let i = 1; i < batLinePts.length; i++) ctx.lineTo(batLinePts[i].x, batLinePts[i].y);
     ctx.strokeStyle = WRC_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.7;
     ctx.stroke(); ctx.globalAlpha = 1;
   }
-  if (netXwrcLine.length > 1) {
-    ctx.beginPath(); ctx.moveTo(netXwrcLine[0].x, netXwrcLine[0].y);
-    for (let i = 1; i < netXwrcLine.length; i++) ctx.lineTo(netXwrcLine[i].x, netXwrcLine[i].y);
-    ctx.strokeStyle = XWOBA_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.7;
-    ctx.setLineDash([4, 3]);
-    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+
+  // ── draw pitching oWRC+ line (solid rose) ──
+  const pitLinePts = pitLine.map(p => ({ ...p, wrcPlus: 200 - p.wrcPlus, y: yScaleWrc(200 - p.wrcPlus), type: 'pit-wrc' }));
+  if (pitLinePts.length > 1) {
+    ctx.beginPath(); ctx.moveTo(pitLinePts[0].x, pitLinePts[0].y);
+    for (let i = 1; i < pitLinePts.length; i++) ctx.lineTo(pitLinePts[i].x, pitLinePts[i].y);
+    ctx.strokeStyle = OWRC_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.7;
+    ctx.stroke(); ctx.globalAlpha = 1;
   }
 
-  // ── side labels ──
-  ctx.font = '8px sans-serif'; ctx.globalAlpha = 0.6;
-  ctx.fillStyle = WRC_LINE_COLOR; ctx.textAlign = 'right';
-  ctx.fillText('Hitting ▲', w - pad.right - 2, pad.top + 10);
+  // ── legend ──
+  ctx.font = '8px sans-serif'; ctx.globalAlpha = 0.6; ctx.textAlign = 'right';
+  ctx.fillStyle = WRC_LINE_COLOR;
+  ctx.fillText('— wRC+', w - pad.right - 2, pad.top + 10);
   ctx.fillStyle = OWRC_LINE_COLOR;
-  ctx.fillText('Pitching ▼', w - pad.right - 2, h - pad.bottom - 4);
+  ctx.fillText('— oWRC+', w - pad.right - 2, pad.top + 20);
   ctx.globalAlpha = 1;
 
   pointsMap.set(canvas, pts);
-  lineMap.set(canvas, netWrcLine.map(lp => ({ ...lp, type: 'net-wrc' })));
-  xLineMap.set(canvas, netXwrcLine.map(lp => ({ ...lp, type: 'net-xwrc' })));
+  lineMap.set(canvas, batLinePts);
+  xLineMap.set(canvas, pitLinePts);
 }
 
 /* ================================================================
@@ -1624,11 +1601,11 @@ document.addEventListener('mousemove', e => {
     tooltip.style.left = (e.clientX + 14) + 'px';
     tooltip.style.top  = (e.clientY - 10) + 'px';
     const windowLabel = viewMode === 'pa' ? ` (last ${bestLine.paNum} PA)` : ` · After ${bestLine.paNum} PA`;
-    if (bestLine.type === 'net-wrc') {
-      tooltip.innerHTML = `<strong>Net wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+    if (bestLine.type === 'bat-wrc') {
+      tooltip.innerHTML = `<strong>wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
-    } else if (bestLine.type === 'net-xwrc') {
-      tooltip.innerHTML = `<strong>Net xwRC+ ${Math.round(bestLine.xWrcPlus)}</strong><br>` +
+    } else if (bestLine.type === 'pit-wrc') {
+      tooltip.innerHTML = `<strong>oWRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     } else if (bestLine.type === 'xwoba') {
       const xLabel = isPitcherRow ? 'oWRC+' : 'xwRC+';
