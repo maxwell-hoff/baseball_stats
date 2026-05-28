@@ -222,7 +222,8 @@ const WRC_LINE_COLOR = '#6366f1';
 const OWRC_LINE_COLOR = '#e11d48';
 const XWOBA_LINE_COLOR = '#14b8a6';
 const BSR_BAR_COLOR = '#10b981';
-const DEF_BAR_COLOR = '#f59e0b';
+const DEF_BAR_COLOR = '#06b6d4';
+const RP_BAR_COLOR = '#f97316';
 const WRC_LINE_MIN_PA = 10;
 
 const HIT_EVENTS = new Set(['single','double','triple','home_run']);
@@ -461,7 +462,8 @@ function buildTeamRows(mode) {
   function ensureTeam(abbr) {
     if (!teams.has(abbr)) teams.set(abbr, {
       name: abbr, team: abbr,
-      battingEvents: [], pitchingEvents: [], baserunningEvents: [], events: [],
+      battingEvents: [], pitchingEvents: [], spEvents: [], rpEvents: [],
+      baserunningEvents: [], events: [],
       bsr: 0, sb: 0, cs: 0, def_runs: 0, playerType: 'team',
     });
     return teams.get(abbr);
@@ -481,7 +483,11 @@ function buildTeamRows(mode) {
       const abbr = p.team;
       if (!abbr) continue;
       const t = ensureTeam(abbr);
-      for (const e of p.events) t.pitchingEvents.push(e);
+      const isStarter = p.events.some(e => e[3] === 1);
+      for (const e of p.events) {
+        t.pitchingEvents.push(e);
+        if (isStarter) t.spEvents.push(e); else t.rpEvents.push(e);
+      }
     }
   } else {
     const playerTeamBsr = new Map();
@@ -505,10 +511,13 @@ function buildTeamRows(mode) {
       }
     }
     for (const p of pitchers) {
+      const isStarter = p.events.some(e => e[3] === 1);
       for (const e of p.events) {
         const abbr = e[4];
         if (!abbr) continue;
-        ensureTeam(abbr).pitchingEvents.push(e);
+        const t = ensureTeam(abbr);
+        t.pitchingEvents.push(e);
+        if (isStarter) t.spEvents.push(e); else t.rpEvents.push(e);
       }
     }
   }
@@ -517,6 +526,8 @@ function buildTeamRows(mode) {
   for (const t of teams.values()) {
     t.battingEvents.sort(evtSort);
     t.pitchingEvents.sort(evtSort);
+    t.spEvents.sort(evtSort);
+    t.rpEvents.sort(evtSort);
     t.baserunningEvents = t.baserunningEvents.map(e =>
       [e[0], e[1], round3(curLC.lgwOBA + e[2]), e[3], e[4], e[5], e[6], e[7]]);
     t.baserunningEvents.sort(evtSort);
@@ -670,6 +681,10 @@ function render() {
         if (batS.pa < minPA) continue;
       }
       if (q && !p.name.toLowerCase().includes(q)) continue;
+      const spEntity = { events: p.spEvents || [] };
+      const rpEntity = { events: p.rpEvents || [] };
+      const { display: spDisplay, stats: spStats } = getEventsForEntity(spEntity, paCount);
+      const { display: rpDisplay, stats: rpStats } = getEventsForEntity(rpEntity, paCount);
       const bsrEntity = { events: p.baserunningEvents || [] };
       const fldEntity = { events: p.fieldingEvents || [] };
       const { display: bsrDisplay, stats: bsrStats } = getEventsForEntity(bsrEntity, paCount);
@@ -696,6 +711,10 @@ function render() {
         _battingStatEvts: batStats,
         _pitchingDisplayEvts: pitDisplay,
         _pitchingStatEvts: pitStats,
+        _spDisplayEvts: spDisplay,
+        _spStatEvts: spStats,
+        _rpDisplayEvts: rpDisplay,
+        _rpStatEvts: rpStats,
         _bsrDisplayEvts: bsrDisplay,
         _bsrStatEvts: bsrStats,
         _fldDisplayEvts: fldDisplay,
@@ -886,46 +905,117 @@ function render() {
           }
         }
 
-        // ── Pitching section ──
-        const pitKey = r.team + '-pitching';
-        const pitExpanded = expandedSections.has(pitKey);
-        const pitTr = document.createElement('tr');
-        pitTr.classList.add('section-row');
-        pitTr.innerHTML = `
+        // ── helper: classify pitcher as SP if they have any start (at_bat_number===1) ──
+        function splitPitcherEvents(events) {
+          const isStarter = events.some(e => e[3] === 1);
+          return isStarter ? { sp: events, rp: [] } : { sp: [], rp: events };
+        }
+
+        // ── Starting Pitching section ──
+        const spKey = r.team + '-sp';
+        const spExpanded = expandedSections.has(spKey);
+        const spS = computeStats(r._spStatEvts || [], true);
+        const spTr = document.createElement('tr');
+        spTr.classList.add('section-row');
+        spTr.innerHTML = `
           <td class="col-rank"></td>
-          <td class="col-name"><span class="expand-arrow${pitExpanded ? ' open' : ''}">▶</span> Pitching</td>
+          <td class="col-name"><span class="expand-arrow${spExpanded ? ' open' : ''}">▶</span> Starting Pitching</td>
           <td class="col-team"></td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
-          <td class="col-num">${r.owrc_plus ?? '–'}</td>
-          <td class="col-num">${r.pitching_xwoba?.toFixed(3) ?? '–'}</td>
-          <td class="col-num">${r.pitching_pa ?? 0}</td>
+          <td class="col-num">${spS.pa > 0 ? spS.wrc_plus : '–'}</td>
+          <td class="col-num">${spS.pa > 0 ? spS.xwoba.toFixed(3) : '–'}</td>
+          <td class="col-num">${spS.pa}</td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-chart"><canvas></canvas></td>`;
-        pitTr.addEventListener('click', e => {
+        spTr.addEventListener('click', e => {
           e.stopPropagation();
-          if (expandedSections.has(pitKey)) expandedSections.delete(pitKey);
-          else expandedSections.add(pitKey);
+          if (expandedSections.has(spKey)) expandedSections.delete(spKey);
+          else expandedSections.add(spKey);
           render();
         });
-        frag.appendChild(pitTr);
-        canvasMap.set(pitTr.querySelector('canvas'), {
-          _displayEvts: r._pitchingDisplayEvts, _statEvts: r._pitchingStatEvts,
+        frag.appendChild(spTr);
+        canvasMap.set(spTr.querySelector('canvas'), {
+          _displayEvts: r._spDisplayEvts, _statEvts: r._spStatEvts,
           _paCount: r._paCount, isPitcher: true,
         });
 
-        if (pitExpanded) {
-          const pitcherPlayers = getPlayersForTeam(r.team, 'pitcher');
-          const pitcherRows = [];
-          for (const p of pitcherPlayers) {
+        if (spExpanded) {
+          const allPitchers = getPlayersForTeam(r.team, 'pitcher');
+          const spRows = [];
+          for (const p of allPitchers) {
             const { display, stats } = getEventsForEntity(p, playerPaCount);
             if (display.length === 0) continue;
-            const s = computeStats(stats, true);
-            pitcherRows.push({ ...p, ...s, wrc_plus: null, owrc_plus: s.wrc_plus, _displayEvts: display, _statEvts: stats, _paCount: playerPaCount, isPitcher: true });
+            const { sp: spEvts } = splitPitcherEvents(display);
+            if (spEvts.length === 0) continue;
+            const s = computeStats(spEvts, true);
+            spRows.push({ ...p, ...s, wrc_plus: null, owrc_plus: s.wrc_plus, _displayEvts: spEvts, _statEvts: spEvts, _paCount: playerPaCount, isPitcher: true });
           }
-          pitcherRows.sort((a, b) => (b.owrc_plus ?? 0) - (a.owrc_plus ?? 0));
-          for (const pr of pitcherRows) {
+          spRows.sort((a, b) => (b.owrc_plus ?? 0) - (a.owrc_plus ?? 0));
+          for (const pr of spRows) {
+            const subTr = document.createElement('tr');
+            subTr.classList.add('player-subrow');
+            subTr.innerHTML = `
+              <td class="col-rank"></td>
+              <td class="col-name" title="${pr.name}">${pr.name}</td>
+              <td class="col-team">${pr.team || ''}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.owrc_plus}</td>
+              <td class="col-num">${pr.xwoba.toFixed(3)}</td>
+              <td class="col-num">${pr.pa}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              <td class="col-chart"><canvas></canvas></td>`;
+            frag.appendChild(subTr);
+            canvasMap.set(subTr.querySelector('canvas'), pr);
+          }
+        }
+
+        // ── Relief Pitching section ──
+        const rpKey = r.team + '-rp';
+        const rpExpanded = expandedSections.has(rpKey);
+        const rpS = computeStats(r._rpStatEvts || [], true);
+        const rpTr = document.createElement('tr');
+        rpTr.classList.add('section-row');
+        rpTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name"><span class="expand-arrow${rpExpanded ? ' open' : ''}">▶</span> Relief Pitching</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${rpS.pa > 0 ? rpS.wrc_plus : '–'}</td>
+          <td class="col-num">${rpS.pa > 0 ? rpS.xwoba.toFixed(3) : '–'}</td>
+          <td class="col-num">${rpS.pa}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-chart"><canvas></canvas></td>`;
+        rpTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(rpKey)) expandedSections.delete(rpKey);
+          else expandedSections.add(rpKey);
+          render();
+        });
+        frag.appendChild(rpTr);
+        canvasMap.set(rpTr.querySelector('canvas'), {
+          _displayEvts: r._rpDisplayEvts, _statEvts: r._rpStatEvts,
+          _paCount: r._paCount, isPitcher: true,
+        });
+
+        if (rpExpanded) {
+          const allPitchers2 = getPlayersForTeam(r.team, 'pitcher');
+          const rpRows = [];
+          for (const p of allPitchers2) {
+            const { display, stats } = getEventsForEntity(p, playerPaCount);
+            if (display.length === 0) continue;
+            const { rp: rpEvts } = splitPitcherEvents(display);
+            if (rpEvts.length === 0) continue;
+            const s = computeStats(rpEvts, true);
+            rpRows.push({ ...p, ...s, wrc_plus: null, owrc_plus: s.wrc_plus, _displayEvts: rpEvts, _statEvts: rpEvts, _paCount: playerPaCount, isPitcher: true });
+          }
+          rpRows.sort((a, b) => (b.owrc_plus ?? 0) - (a.owrc_plus ?? 0));
+          for (const pr of rpRows) {
             const subTr = document.createElement('tr');
             subTr.classList.add('player-subrow');
             subTr.innerHTML = `
@@ -1411,6 +1501,10 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   const pitDisplay = row._pitchingDisplayEvts;
   const batStats = row._battingStatEvts;
   const pitStats = row._pitchingStatEvts;
+  const spDisplay = row._spDisplayEvts || [];
+  const rpDisplay = row._rpDisplayEvts || [];
+  const spStats = row._spStatEvts || [];
+  const rpStats = row._rpStatEvts || [];
 
   const pad = { top: 4, right: 30, bottom: 12, left: 6 };
   const pw = w - pad.left - pad.right;
@@ -1489,17 +1583,19 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     return m;
   }
   const batSums = sumByDate(batDisplay);
-  const pitSums = sumByDate(pitDisplay);
+  const spSums = sumByDate(spDisplay);
+  const rpSums = sumByDate(rpDisplay);
   const bsrSums = sumByDateOffset(bsrDisplay, curLC.lgwOBA);
   const fldSums = sumByDateOffset(fldDisplay, curLC.lgwOBA);
-  const allBarDates = new Set([...batSums.keys(), ...pitSums.keys(), ...bsrSums.keys(), ...fldSums.keys()]);
+  const allBarDates = new Set([...batSums.keys(), ...spSums.keys(), ...rpSums.keys(), ...bsrSums.keys(), ...fldSums.keys()]);
 
   const pts = [];
   const barW = Math.max(1, Math.min(dayWidthPx * 0.7, 8));
 
   const barLayers = [
     { sums: fldSums, color: DEF_BAR_COLOR, alpha: 0.55, evt: 'fielding', side: 'fld' },
-    { sums: pitSums, color: OWRC_LINE_COLOR, alpha: 0.55, evt: 'pitching', side: 'pit' },
+    { sums: rpSums, color: RP_BAR_COLOR, alpha: 0.55, evt: 'relief pitching', side: 'rp' },
+    { sums: spSums, color: OWRC_LINE_COLOR, alpha: 0.55, evt: 'starting pitching', side: 'sp' },
     { sums: bsrSums, color: BSR_BAR_COLOR, alpha: 0.6, evt: 'baserunning', side: 'bsr' },
     { sums: batSums, color: WRC_LINE_COLOR, alpha: 0.7, evt: 'hitting', side: 'bat' },
   ];
@@ -1555,7 +1651,8 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   }
 
   const batLine = computeRunningLine(viewMode === 'pa' ? batDisplay : batStats);
-  const pitLine = computeRunningLine(viewMode === 'pa' ? pitDisplay : pitStats);
+  const spLine = computeRunningLine(viewMode === 'pa' ? spDisplay : spStats);
+  const rpLine = computeRunningLine(viewMode === 'pa' ? rpDisplay : rpStats);
 
   // ── draw hitting wRC+ line (solid indigo) ──
   const batLinePts = batLine.map(p => ({ ...p, y: yScaleWrc(p.wrcPlus), type: 'bat-wrc' }));
@@ -1566,12 +1663,21 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     ctx.stroke(); ctx.globalAlpha = 1;
   }
 
-  // ── draw pitching oWRC+ line (solid rose) ──
-  const pitLinePts = pitLine.map(p => ({ ...p, wrcPlus: 200 - p.wrcPlus, y: yScaleWrc(200 - p.wrcPlus), type: 'pit-wrc' }));
-  if (pitLinePts.length > 1) {
-    ctx.beginPath(); ctx.moveTo(pitLinePts[0].x, pitLinePts[0].y);
-    for (let i = 1; i < pitLinePts.length; i++) ctx.lineTo(pitLinePts[i].x, pitLinePts[i].y);
+  // ── draw SP oWRC+ line (solid rose) ──
+  const spLinePts = spLine.map(p => ({ ...p, wrcPlus: 200 - p.wrcPlus, y: yScaleWrc(200 - p.wrcPlus), type: 'sp-wrc' }));
+  if (spLinePts.length > 1) {
+    ctx.beginPath(); ctx.moveTo(spLinePts[0].x, spLinePts[0].y);
+    for (let i = 1; i < spLinePts.length; i++) ctx.lineTo(spLinePts[i].x, spLinePts[i].y);
     ctx.strokeStyle = OWRC_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.7;
+    ctx.stroke(); ctx.globalAlpha = 1;
+  }
+
+  // ── draw RP oWRC+ line (solid orange) ──
+  const rpLinePts = rpLine.map(p => ({ ...p, wrcPlus: 200 - p.wrcPlus, y: yScaleWrc(200 - p.wrcPlus), type: 'rp-wrc' }));
+  if (rpLinePts.length > 1) {
+    ctx.beginPath(); ctx.moveTo(rpLinePts[0].x, rpLinePts[0].y);
+    for (let i = 1; i < rpLinePts.length; i++) ctx.lineTo(rpLinePts[i].x, rpLinePts[i].y);
+    ctx.strokeStyle = RP_BAR_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.7;
     ctx.stroke(); ctx.globalAlpha = 1;
   }
 
@@ -1579,8 +1685,8 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   ctx.font = '8px sans-serif'; ctx.globalAlpha = 0.6; ctx.textAlign = 'right';
   const legendX = w - pad.right - 2;
   const legendItems = [
-    [WRC_LINE_COLOR, 'Hitting'], [OWRC_LINE_COLOR, 'Pitching'],
-    [BSR_BAR_COLOR, 'Baserun'], [DEF_BAR_COLOR, 'Fielding'],
+    [WRC_LINE_COLOR, 'Hitting'], [OWRC_LINE_COLOR, 'SP'],
+    [RP_BAR_COLOR, 'RP'], [BSR_BAR_COLOR, 'Baserun'], [DEF_BAR_COLOR, 'Fielding'],
   ];
   legendItems.forEach(([c, label], i) => {
     ctx.fillStyle = c;
@@ -1590,7 +1696,7 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
 
   pointsMap.set(canvas, pts);
   lineMap.set(canvas, batLinePts);
-  xLineMap.set(canvas, pitLinePts);
+  xLineMap.set(canvas, [...spLinePts, ...rpLinePts]);
 }
 
 /* ================================================================
@@ -1648,10 +1754,12 @@ document.addEventListener('mousemove', e => {
     tooltip.style.left = (e.clientX + 14) + 'px';
     tooltip.style.top  = (e.clientY - 10) + 'px';
     const evtLabel = best.evt === 'hitting' ? 'Hitting'
+      : best.evt === 'starting pitching' ? 'Starting Pitching'
+      : best.evt === 'relief pitching' ? 'Relief Pitching'
       : best.evt === 'pitching' ? 'Pitching'
       : best.evt === 'baserunning' ? 'Baserunning'
       : best.evt === 'fielding' ? 'Fielding'
-      : best.side === 'pit' ? `${PRETTY[best.evt] || best.evt} (allowed)`
+      : best.side === 'pit' || best.side === 'sp' || best.side === 'rp' ? `${PRETTY[best.evt] || best.evt} (allowed)`
       : (PRETTY[best.evt] || best.evt);
     tooltip.innerHTML = `<strong>${evtLabel}</strong><br>` +
       `${best.date} · Run value ${best.rv.toFixed(3)}`;
@@ -1662,6 +1770,12 @@ document.addEventListener('mousemove', e => {
     const windowLabel = viewMode === 'pa' ? ` (last ${bestLine.paNum} PA)` : ` · After ${bestLine.paNum} PA`;
     if (bestLine.type === 'bat-wrc') {
       tooltip.innerHTML = `<strong>wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'sp-wrc') {
+      tooltip.innerHTML = `<strong>SP oWRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'rp-wrc') {
+      tooltip.innerHTML = `<strong>RP oWRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     } else if (bestLine.type === 'pit-wrc') {
       tooltip.innerHTML = `<strong>oWRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
