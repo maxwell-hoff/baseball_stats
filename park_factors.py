@@ -180,7 +180,8 @@ def compute_park_factors(
 ) -> pd.DataFrame:
     """
     For each stadium, compare mean run_value of PAs at that stadium vs.
-    mean run_value of all other PAs league-wide (excluding that stadium).
+    mean run_value of PAs in that team's road games. This controls for
+    the quality of the home team's pitching staff, isolating the park effect.
     Computed per-year then averaged, so year-to-year league trends cancel out.
 
     If exclude_home_batters=True, only visiting-team PAs are used at each
@@ -213,7 +214,7 @@ def compute_park_factors(
                 at_park = yr_pa[yr_pa["home_team"] == team]
                 if exclude_home_batters:
                     at_park = at_park[at_park["inning_topbot"] == "Top"]
-                rest = yr_pa[yr_pa["home_team"] != team]
+                rest = yr_pa[yr_pa["away_team"] == team]
 
                 if hand:
                     at_park = at_park[at_park["stand"] == hand]
@@ -450,7 +451,7 @@ def print_park_factors(pf_df: pd.DataFrame):
         subset = pf_df[pf_df["hand"] == hand_label].sort_values("pf", ascending=False)
         label = {"All": "OVERALL", "L": "LEFT-HANDED BATTERS", "R": "RIGHT-HANDED BATTERS"}[hand_label]
         print(f"  ── {label} {'─' * (55 - len(label))}")
-        print(f"  {'Team':<6} {'PF':>6} {'Raw':>6} {'ParkPAs':>8} {'RestPAs':>9} {'ParkRV':>8} {'RestRV':>8} {'Years':>10}")
+        print(f"  {'Team':<6} {'PF':>6} {'Raw':>6} {'HomePAs':>8} {'AwayPAs':>9} {'HomeRV':>8} {'AwayRV':>8} {'Years':>10}")
         print(f"  {'─' * 69}")
         for _, r in subset.iterrows():
             print(f"  {r['team']:<6} {r['pf']:>6.1f} {r['pf_raw']:>6.1f} "
