@@ -722,6 +722,10 @@ function render() {
         _spStatEvts: spStats,
         _rpDisplayEvts: rpDisplay,
         _rpStatEvts: rpStats,
+        _offDisplayEvts: [...batDisplay, ...bsrDisplay].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]),
+        _offStatEvts: [...batStats, ...bsrStats].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]),
+        _defDisplayEvts: [...pitDisplay, ...fldDisplay].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]),
+        _defStatEvts: [...pitStats, ...fldStats].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]),
         _bsrDisplayEvts: bsrDisplay,
         _bsrStatEvts: bsrStats,
         _fldDisplayEvts: fldDisplay,
@@ -853,6 +857,48 @@ function render() {
       canvasMap.set(tr.querySelector('canvas'), r);
 
       if (expanded) {
+        // ── helper: classify pitcher as SP if they have any start (at_bat_number===1) ──
+        function splitPitcherEvents(events) {
+          const isStarter = events.some(e => e[3] === 1);
+          return isStarter ? { sp: events, rp: [] } : { sp: [], rp: events };
+        }
+
+        // ── Offense section ──
+        const offKey = r.team + '-offense';
+        const offExpanded = expandedSections.has(offKey);
+        const offBatEvts = r._battingStatEvts || [];
+        const offBsrEvts = r._bsrStatEvts || [];
+        const offActualR = offBatEvts.reduce((s, e) => s + (e[8] || 0), 0);
+        const offPA = offBatEvts.length;
+        const offRPlus = offPA > 0 ? Math.round(100 + (offActualR - curLC.lgRPA * offPA) / (curLC.lgRPA * offPA) * 100) : '–';
+        const offTr = document.createElement('tr');
+        offTr.classList.add('section-row');
+        offTr.style.fontWeight = '600';
+        offTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name"><span class="expand-arrow${offExpanded ? ' open' : ''}">▶</span> Offense</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.wrc_plus ?? '–'}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.xwoba.toFixed(3)}</td>
+          <td class="col-num">${offPA}</td>
+          <td class="col-num">${r.bsr_plus ?? '–'}</td>
+          <td class="col-num">–</td>
+          <td class="col-chart"><canvas></canvas></td>`;
+        offTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(offKey)) expandedSections.delete(offKey);
+          else expandedSections.add(offKey);
+          render();
+        });
+        frag.appendChild(offTr);
+        canvasMap.set(offTr.querySelector('canvas'), {
+          _displayEvts: r._offDisplayEvts, _statEvts: r._offStatEvts,
+          _paCount: r._paCount, isPitcher: false,
+        });
+
+        if (offExpanded) {
         // ── Hitting section ──
         const hitKey = r.team + '-hitting';
         const hitExpanded = expandedSections.has(hitKey);
@@ -860,7 +906,7 @@ function render() {
         hitTr.classList.add('section-row');
         hitTr.innerHTML = `
           <td class="col-rank"></td>
-          <td class="col-name"><span class="expand-arrow${hitExpanded ? ' open' : ''}">▶</span> Hitting</td>
+          <td class="col-name" style="padding-left:28px"><span class="expand-arrow${hitExpanded ? ' open' : ''}">▶</span> Hitting</td>
           <td class="col-team"></td>
           <td class="col-num">–</td>
           <td class="col-num">${r.wrc_plus ?? '–'}</td>
@@ -912,12 +958,108 @@ function render() {
           }
         }
 
-        // ── helper: classify pitcher as SP if they have any start (at_bat_number===1) ──
-        function splitPitcherEvents(events) {
-          const isStarter = events.some(e => e[3] === 1);
-          return isStarter ? { sp: events, rp: [] } : { sp: [], rp: events };
-        }
+        // ── Baserunning section (inside Offense) ──
+        const bsrKey = r.team + '-baserunning';
+        const bsrExpanded = expandedSections.has(bsrKey);
+        const bsrPlus = r.pa > 0 ? Math.round(100 + (r.bsr ?? 0) / (curLC.lgRPA * r.pa) * 100) : '–';
+        const bsrTr = document.createElement('tr');
+        bsrTr.classList.add('section-row');
+        bsrTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name" style="padding-left:28px"><span class="expand-arrow${bsrExpanded ? ' open' : ''}">▶</span> Baserunning</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">${bsrPlus}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.pa}</td>
+          <td class="col-num">${bsrPlus}</td>
+          <td class="col-num">–</td>
+          <td class="col-chart"><canvas></canvas></td>`;
+        bsrTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(bsrKey)) expandedSections.delete(bsrKey);
+          else expandedSections.add(bsrKey);
+          render();
+        });
+        frag.appendChild(bsrTr);
+        canvasMap.set(bsrTr.querySelector('canvas'), {
+          _displayEvts: r._bsrDisplayEvts, _statEvts: r._bsrStatEvts,
+          _paCount: r._paCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
+        });
 
+        if (bsrExpanded) {
+          const bsrPlayers = getPlayersForTeam(r.team, 'batter');
+          const bsrPlayerRows = [];
+          for (const p of bsrPlayers) {
+            const bsrEvtsOffset = (p.baserunning_events ?? []).map(e =>
+              [e[0], e[1], round3(curLC.lgwOBA + e[2]), e[3], e[4], e[5], e[6], e[7]]);
+            const bsrEvtEntity = { events: bsrEvtsOffset };
+            const { display: bsrD, stats: bsrSt } = getEventsForEntity(bsrEvtEntity, playerPaCount);
+            const { display, stats } = getEventsForEntity(p, playerPaCount);
+            if (display.length === 0) continue;
+            const s = computeStats(stats, false);
+            const playerBsrPlus = s.pa > 0 ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * s.pa) * 100) : '–';
+            bsrPlayerRows.push({ ...p, ...s, bsr_plus: playerBsrPlus, _displayEvts: bsrD, _statEvts: bsrSt, _paCount: playerPaCount, isPitcher: false, _runsOffset: curLC.lgwOBA });
+          }
+          bsrPlayerRows.sort((a, b) => (b.bsr ?? 0) - (a.bsr ?? 0));
+          for (const pr of bsrPlayerRows) {
+            const subTr = document.createElement('tr');
+            subTr.classList.add('player-subrow');
+            subTr.innerHTML = `
+              <td class="col-rank"></td>
+              <td class="col-name" title="${pr.name}">${pr.name}</td>
+              <td class="col-team">${pr.team || ''}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.bsr_plus}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.pa}</td>
+              <td class="col-num">${pr.bsr_plus}</td>
+              <td class="col-num">–</td>
+              <td class="col-chart"><canvas></canvas></td>`;
+            frag.appendChild(subTr);
+            canvasMap.set(subTr.querySelector('canvas'), pr);
+          }
+        }
+        } // end offExpanded
+
+        // ── Defense section ──
+        const defenseKey = r.team + '-defense';
+        const defenseExpanded = expandedSections.has(defenseKey);
+        const defPitEvts = r._pitchingStatEvts || [];
+        const defFldEvts = r._fldStatEvts || [];
+        const defActualRA = defPitEvts.reduce((s, e) => s + (e[8] || 0), 0);
+        const defPitPA = defPitEvts.length;
+        const defRAPlus = defPitPA > 0 ? Math.round(200 - (100 + (defActualRA - curLC.lgRPA * defPitPA) / (curLC.lgRPA * defPitPA) * 100)) : '–';
+        const defenseTr = document.createElement('tr');
+        defenseTr.classList.add('section-row');
+        defenseTr.style.fontWeight = '600';
+        defenseTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name"><span class="expand-arrow${defenseExpanded ? ' open' : ''}">▶</span> Defense</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.owrc_plus ?? '–'}</td>
+          <td class="col-num">${r.pitching_xwoba?.toFixed(3) ?? '–'}</td>
+          <td class="col-num">${r.pitching_pa ?? 0}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.def_plus ?? '–'}</td>
+          <td class="col-chart"><canvas></canvas></td>`;
+        defenseTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(defenseKey)) expandedSections.delete(defenseKey);
+          else expandedSections.add(defenseKey);
+          render();
+        });
+        frag.appendChild(defenseTr);
+        canvasMap.set(defenseTr.querySelector('canvas'), {
+          _displayEvts: r._defDisplayEvts, _statEvts: r._defStatEvts,
+          _paCount: r._paCount, isPitcher: true,
+        });
+
+        if (defenseExpanded) {
         // ── Starting Pitching section ──
         const spKey = r.team + '-sp';
         const spExpanded = expandedSections.has(spKey);
@@ -926,7 +1068,7 @@ function render() {
         spTr.classList.add('section-row');
         spTr.innerHTML = `
           <td class="col-rank"></td>
-          <td class="col-name"><span class="expand-arrow${spExpanded ? ' open' : ''}">▶</span> Starting Pitching</td>
+          <td class="col-name" style="padding-left:28px"><span class="expand-arrow${spExpanded ? ' open' : ''}">▶</span> Starting Pitching</td>
           <td class="col-team"></td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
@@ -988,7 +1130,7 @@ function render() {
         rpTr.classList.add('section-row');
         rpTr.innerHTML = `
           <td class="col-rank"></td>
-          <td class="col-name"><span class="expand-arrow${rpExpanded ? ' open' : ''}">▶</span> Relief Pitching</td>
+          <td class="col-name" style="padding-left:28px"><span class="expand-arrow${rpExpanded ? ' open' : ''}">▶</span> Relief Pitching</td>
           <td class="col-team"></td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
@@ -1042,71 +1184,6 @@ function render() {
           }
         }
 
-        // ── Baserunning section ──
-        const bsrKey = r.team + '-baserunning';
-        const bsrExpanded = expandedSections.has(bsrKey);
-        const bsrPlus = r.pa > 0 ? Math.round(100 + (r.bsr ?? 0) / (curLC.lgRPA * r.pa) * 100) : '–';
-        const bsrTr = document.createElement('tr');
-        bsrTr.classList.add('section-row');
-        bsrTr.innerHTML = `
-          <td class="col-rank"></td>
-          <td class="col-name"><span class="expand-arrow${bsrExpanded ? ' open' : ''}">▶</span> Baserunning</td>
-          <td class="col-team"></td>
-          <td class="col-num">–</td>
-          <td class="col-num">${bsrPlus}</td>
-          <td class="col-num">–</td>
-          <td class="col-num">–</td>
-          <td class="col-num">${r.pa}</td>
-          <td class="col-num">${bsrPlus}</td>
-          <td class="col-num">–</td>
-          <td class="col-chart"><canvas></canvas></td>`;
-        bsrTr.addEventListener('click', e => {
-          e.stopPropagation();
-          if (expandedSections.has(bsrKey)) expandedSections.delete(bsrKey);
-          else expandedSections.add(bsrKey);
-          render();
-        });
-        frag.appendChild(bsrTr);
-        canvasMap.set(bsrTr.querySelector('canvas'), {
-          _displayEvts: r._bsrDisplayEvts, _statEvts: r._bsrStatEvts,
-          _paCount: r._paCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
-        });
-
-        if (bsrExpanded) {
-          const bsrPlayers = getPlayersForTeam(r.team, 'batter');
-          const bsrPlayerRows = [];
-          for (const p of bsrPlayers) {
-            const bsrEvtsOffset = (p.baserunning_events ?? []).map(e =>
-              [e[0], e[1], round3(curLC.lgwOBA + e[2]), e[3], e[4], e[5], e[6], e[7]]);
-            const bsrEvtEntity = { events: bsrEvtsOffset };
-            const { display: bsrD, stats: bsrSt } = getEventsForEntity(bsrEvtEntity, playerPaCount);
-            const { display, stats } = getEventsForEntity(p, playerPaCount);
-            if (display.length === 0) continue;
-            const s = computeStats(stats, false);
-            const playerBsrPlus = s.pa > 0 ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * s.pa) * 100) : '–';
-            bsrPlayerRows.push({ ...p, ...s, bsr_plus: playerBsrPlus, _displayEvts: bsrD, _statEvts: bsrSt, _paCount: playerPaCount, isPitcher: false, _runsOffset: curLC.lgwOBA });
-          }
-          bsrPlayerRows.sort((a, b) => (b.bsr ?? 0) - (a.bsr ?? 0));
-          for (const pr of bsrPlayerRows) {
-            const subTr = document.createElement('tr');
-            subTr.classList.add('player-subrow');
-            subTr.innerHTML = `
-              <td class="col-rank"></td>
-              <td class="col-name" title="${pr.name}">${pr.name}</td>
-              <td class="col-team">${pr.team || ''}</td>
-              <td class="col-num">–</td>
-              <td class="col-num">${pr.bsr_plus}</td>
-              <td class="col-num">–</td>
-              <td class="col-num">–</td>
-              <td class="col-num">${pr.pa}</td>
-              <td class="col-num">${pr.bsr_plus}</td>
-              <td class="col-num">–</td>
-              <td class="col-chart"><canvas></canvas></td>`;
-            frag.appendChild(subTr);
-            canvasMap.set(subTr.querySelector('canvas'), pr);
-          }
-        }
-
         // ── Fielding section ──
         const defKey = r.team + '-fielding';
         const defExpanded = expandedSections.has(defKey);
@@ -1119,7 +1196,7 @@ function render() {
         defTr.classList.add('section-row');
         defTr.innerHTML = `
           <td class="col-rank"></td>
-          <td class="col-name"><span class="expand-arrow${defExpanded ? ' open' : ''}">▶</span> Fielding</td>
+          <td class="col-name" style="padding-left:28px"><span class="expand-arrow${defExpanded ? ' open' : ''}">▶</span> Fielding</td>
           <td class="col-team"></td>
           <td class="col-num">–</td>
           <td class="col-num">${defPlus}</td>
@@ -1182,6 +1259,7 @@ function render() {
             canvasMap.set(subTr.querySelector('canvas'), pr);
           }
         }
+        } // end defenseExpanded
       }
     } else {
       const badge = playerTypeFilter === 'all'
@@ -1668,6 +1746,7 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   let batActualR = 0, pitActualR = 0;
   const netWin = [];
   const netWrcPts = [], netRunsPts = [];
+  const offRPts = [], defRAPts = [];
 
   for (const { e, src } of merged) {
     const [dateStr, evt, rv, , , , stadium, hand] = e;
@@ -1731,6 +1810,17 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
       const netActual = batRAboveAvg - pitRAboveAvg + bsrAcc + fldAcc;
       const nruns = 100 + netActual / (curLC.lgRPA * totalPA) * 100;
       netRunsPts.push({ x, date: dateStr, wrcPlus: nruns, paNum: netWin.length, type: 'net-runs' });
+
+      // Offense R+ (actual runs scored, scaled to 100)
+      if (batPC > 0) {
+        const offR = 100 + batRAboveAvg / (curLC.lgRPA * batPC) * 100;
+        offRPts.push({ x, date: dateStr, wrcPlus: offR, paNum: netWin.length, type: 'off-r' });
+      }
+      // Defense RA+ (actual runs allowed inverted, scaled to 100; higher = fewer runs allowed = better)
+      if (pitPC > 0) {
+        const defRA = 200 - (100 + pitRAboveAvg / (curLC.lgRPA * pitPC) * 100);
+        defRAPts.push({ x, date: dateStr, wrcPlus: defRA, paNum: netWin.length, type: 'def-ra' });
+      }
     }
   }
 
@@ -1753,6 +1843,26 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
 
+  // ── draw Offense R+ line (solid blue) ──
+  const offLine = offRPts.map(p => ({ ...p, y: yScaleWrc(p.wrcPlus) }));
+  if (offLine.length > 1) {
+    ctx.beginPath(); ctx.moveTo(offLine[0].x, offLine[0].y);
+    for (let i = 1; i < offLine.length; i++) ctx.lineTo(offLine[i].x, offLine[i].y);
+    ctx.strokeStyle = WRC_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.55;
+    ctx.setLineDash([6, 3]);
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+
+  // ── draw Defense RA+ line (solid rose) ──
+  const defLine = defRAPts.map(p => ({ ...p, y: yScaleWrc(p.wrcPlus) }));
+  if (defLine.length > 1) {
+    ctx.beginPath(); ctx.moveTo(defLine[0].x, defLine[0].y);
+    for (let i = 1; i < defLine.length; i++) ctx.lineTo(defLine[i].x, defLine[i].y);
+    ctx.strokeStyle = OWRC_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.55;
+    ctx.setLineDash([6, 3]);
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+
   // ── legend ──
   ctx.font = '8px sans-serif'; ctx.globalAlpha = 0.6; ctx.textAlign = 'right';
   const legendX = w - pad.right - 2;
@@ -1769,11 +1879,15 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   ctx.fillText('— Net wRC+', legendX, lineY0);
   ctx.fillStyle = XWOBA_LINE_COLOR;
   ctx.fillText('┄ Net Runs+', legendX, lineY0 + 10);
+  ctx.fillStyle = WRC_LINE_COLOR;
+  ctx.fillText('╌ Off R+', legendX, lineY0 + 20);
+  ctx.fillStyle = OWRC_LINE_COLOR;
+  ctx.fillText('╌ Def RA+', legendX, lineY0 + 30);
   ctx.globalAlpha = 1;
 
   pointsMap.set(canvas, pts);
-  lineMap.set(canvas, nwrcLine);
-  xLineMap.set(canvas, nrunsLine);
+  lineMap.set(canvas, [...nwrcLine, ...offLine]);
+  xLineMap.set(canvas, [...nrunsLine, ...defLine]);
 }
 
 /* ================================================================
@@ -1850,6 +1964,12 @@ document.addEventListener('mousemove', e => {
         `${bestLine.date}${windowLabel}`;
     } else if (bestLine.type === 'net-runs') {
       tooltip.innerHTML = `<strong>Net Runs+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'off-r') {
+      tooltip.innerHTML = `<strong>Off R+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'def-ra') {
+      tooltip.innerHTML = `<strong>Def RA+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     } else if (bestLine.type === 'runs') {
       const rLabel = isPitcherRow ? 'RA+' : 'R+';
