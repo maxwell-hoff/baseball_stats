@@ -188,7 +188,7 @@
         <th class="col-num" data-key="xwoba">xwOBA <span class="arrow"></span></th>
         <th class="col-num" data-key="pa">PA <span class="arrow"></span></th>
         <th class="col-num" data-key="bsr_plus">BsR+ <span class="arrow"></span></th>
-        <th class="col-num" data-key="def_plus">Def+ <span class="arrow"></span></th>
+        <th class="col-num" data-key="def_plus">Def <span class="arrow"></span></th>
         <th class="col-chart">Plate Appearance Run Values</th>
       </tr>
     </thead>
@@ -236,6 +236,11 @@ const NOT_BATTED_BALL = new Set([
   'strikeout','strikeout_double_play','walk','intent_walk',
   'hit_by_pitch','home_run','catcher_interf',
 ]);
+const EVT_TO_PF_KEY = {
+  'single': '1B', 'double': '2B', 'triple': '3B', 'home_run': 'HR',
+  'walk': 'BB', 'intent_walk': 'BB',
+  'strikeout': 'SO', 'strikeout_double_play': 'SO',
+};
 
 const LEGEND_ITEMS = [
   ['HR',  EVENT_COLORS.home_run],
@@ -334,15 +339,20 @@ function syncLC() {
   }
 }
 
-function getParkFactor(stadium, hand) {
+function getParkFactor(stadium, hand, evt) {
   if (!PARK_FACTORS || !stadium) return 1.0;
-  if (hand && PARK_FACTORS[hand] && PARK_FACTORS[hand][stadium] != null) {
-    return PARK_FACTORS[hand][stadium] / 100;
-  }
-  if (PARK_FACTORS.All && PARK_FACTORS.All[stadium] != null) {
-    return PARK_FACTORS.All[stadium] / 100;
-  }
-  return 1.0;
+  const evtKey = evt ? EVT_TO_PF_KEY[evt] : undefined;
+  const lookup = (bucket) => {
+    if (!bucket || !bucket[stadium]) return null;
+    const tf = bucket[stadium];
+    if (typeof tf === 'number') return tf / 100;
+    if (evtKey && tf[evtKey] != null) return tf[evtKey] / 100;
+    if (tf.wOBA != null) return tf.wOBA / 100;
+    return null;
+  };
+  if (hand) { const v = lookup(PARK_FACTORS[hand]); if (v != null) return v; }
+  const v = lookup(PARK_FACTORS.All);
+  return v != null ? v : 1.0;
 }
 
 /* ================================================================
@@ -579,7 +589,7 @@ function computeStats(events, isPitcher) {
     if (HIT_EVENTS.has(evt)) hits++;
     if (WALK_EVENTS.has(evt)) walks++;
     wobaN += rv;
-    pfSum += getParkFactor(stadium, hand);
+    pfSum += getParkFactor(stadium, hand, evt);
     pfCount++;
     if (!WOBA_DENOM_EXCLUDE.has(evt)) {
       wobaD++;
@@ -702,7 +712,7 @@ function render() {
       const totalRAA = batRAA + pitRAA + (p.bsr ?? 0) + fldRunsFromEvts;
       const totalPA = batS.pa + pitS.pa;
       const teamBsrPlus = batS.pa > 0 ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * batS.pa) * 100) : null;
-      const teamDefPlus = fldStats.length > 0 ? Math.round(100 + fldRunsFromEvts / (curLC.lgRPA * fldStats.length) * 100) : null;
+      const teamDefPlus = fldStats.length > 0 ? Math.round(fldRunsFromEvts * 10) / 10 : null;
       rows.push({
         ...p, ...batS,
         owrc_plus: pitS.wrc_plus,
@@ -1191,7 +1201,7 @@ function render() {
         const computedDefRuns = fldStatEvts.reduce((s, e) => s + (e[2] - curLC.lgwOBA), 0);
         const computedDefRunsRound = Math.round(computedDefRuns * 10) / 10;
         const fldPA = fldStatEvts.length;
-        const defPlus = fldPA > 0 ? Math.round(100 + computedDefRuns / (curLC.lgRPA * fldPA) * 100) : '–';
+        const defPlus = fldPA > 0 ? Math.round(computedDefRuns * 10) / 10 : '–';
         const defTr = document.createElement('tr');
         defTr.classList.add('section-row');
         defTr.innerHTML = `
@@ -1231,8 +1241,7 @@ function render() {
             const playerFldEvts = teamFldEvts.filter(e => playerDates.has(e[0]));
             const playerFldRuns = playerFldEvts.reduce((sum, e) => sum + (e[2] - curLC.lgwOBA), 0);
             const playerFldRunsRd = Math.round(playerFldRuns * 10) / 10;
-            const playerDefPlus = playerFldEvts.length > 0
-              ? Math.round(100 + playerFldRuns / (curLC.lgRPA * playerFldEvts.length) * 100) : '–';
+            const playerDefPlus = playerFldEvts.length > 0 ? playerFldRunsRd : '–';
             defPlayerRows.push({
               ...p, ...s, def_plus: playerDefPlus, def_runs_computed: playerFldRunsRd,
               _displayEvts: playerFldEvts, _statEvts: playerFldEvts,
@@ -1518,7 +1527,7 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
     const [dateStr, evt, rv, , , xw, stadium, hand] = e;
     const inDenom = !WOBA_DENOM_EXCLUDE.has(evt);
     const xVal = (xw != null && inDenom) ? xw : (inDenom ? rv : 0);
-    const pf = getParkFactor(stadium, hand);
+    const pf = getParkFactor(stadium, hand, evt);
     const ar = e[8] || 0;
     win.push({ rv, inDenom, xVal, pf, ar });
     wobaNumer += rv;
@@ -1751,7 +1760,7 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   for (const { e, src } of merged) {
     const [dateStr, evt, rv, , , , stadium, hand] = e;
     const inD = !WOBA_DENOM_EXCLUDE.has(evt);
-    const pf = getParkFactor(stadium, hand);
+    const pf = getParkFactor(stadium, hand, evt);
     const ar = (src === 'bat' || src === 'pit') ? (e[8] || 0) : 0;
     const entry = { src, rv, inD, pf, delta: 0, ar };
 
@@ -1863,26 +1872,21 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
 
-  // ── legend ──
-  ctx.font = '8px sans-serif'; ctx.globalAlpha = 0.6; ctx.textAlign = 'right';
-  const legendX = w - pad.right - 2;
-  const barLegend = [
-    [WRC_LINE_COLOR, 'Hitting'], [OWRC_LINE_COLOR, 'SP'],
-    [RP_BAR_COLOR, 'RP'], [BSR_BAR_COLOR, 'Baserun'], [DEF_BAR_COLOR, 'Fielding'],
+  // ── legend (horizontal, left-aligned) ──
+  ctx.font = '8px sans-serif'; ctx.globalAlpha = 0.6; ctx.textAlign = 'left';
+  const legendItems = [
+    [WRC_LINE_COLOR, '■ Hitting'], [OWRC_LINE_COLOR, '■ SP'],
+    [RP_BAR_COLOR, '■ RP'], [BSR_BAR_COLOR, '■ Baserun'], [DEF_BAR_COLOR, '■ Fielding'],
+    ['#1e1b4b', '— Net wRC+'], [XWOBA_LINE_COLOR, '┄ Net Runs+'],
+    [WRC_LINE_COLOR, '╌ Off R+'], [OWRC_LINE_COLOR, '╌ Def RA+'],
   ];
-  barLegend.forEach(([c, label], i) => {
+  let legendCx = pad.left + 2;
+  const legendCy = pad.top + 8;
+  for (const [c, label] of legendItems) {
     ctx.fillStyle = c;
-    ctx.fillText('■ ' + label, legendX, pad.top + 10 + i * 10);
-  });
-  const lineY0 = pad.top + 10 + barLegend.length * 10;
-  ctx.fillStyle = '#1e1b4b';
-  ctx.fillText('— Net wRC+', legendX, lineY0);
-  ctx.fillStyle = XWOBA_LINE_COLOR;
-  ctx.fillText('┄ Net Runs+', legendX, lineY0 + 10);
-  ctx.fillStyle = WRC_LINE_COLOR;
-  ctx.fillText('╌ Off R+', legendX, lineY0 + 20);
-  ctx.fillStyle = OWRC_LINE_COLOR;
-  ctx.fillText('╌ Def RA+', legendX, lineY0 + 30);
+    ctx.fillText(label, legendCx, legendCy);
+    legendCx += ctx.measureText(label).width + 6;
+  }
   ctx.globalAlpha = 1;
 
   pointsMap.set(canvas, pts);
