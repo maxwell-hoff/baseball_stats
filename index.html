@@ -183,12 +183,13 @@
         <th class="col-name" data-key="name">Player <span class="arrow"></span></th>
         <th class="col-team">Team</th>
         <th class="col-num" data-key="net_wrc_plus">Net wRC+ <span class="arrow"></span></th>
+        <th class="col-num" data-key="net_runs_plus">Net Runs+ <span class="arrow"></span></th>
         <th class="col-num" data-key="wrc_plus">wRC+ <span class="arrow"></span></th>
         <th class="col-num" data-key="owrc_plus">oWRC+ <span class="arrow"></span></th>
         <th class="col-num" data-key="xwoba">xwOBA <span class="arrow"></span></th>
         <th class="col-num" data-key="pa">PA <span class="arrow"></span></th>
         <th class="col-num" data-key="bsr_plus">BsR+ <span class="arrow"></span></th>
-        <th class="col-num" data-key="def_plus">Def <span class="arrow"></span></th>
+        <th class="col-num" data-key="def_plus">DRS <span class="arrow"></span></th>
         <th class="col-chart">Plate Appearance Run Values</th>
       </tr>
     </thead>
@@ -533,6 +534,19 @@ function buildTeamRows(mode) {
   }
 
   const evtSort = (a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3];
+
+  // Pre-pass: compute league-average (xwOBA - rv) per batted ball to remove
+  // the systematic bias between xwOBA scale and linear-weight scale
+  let lgFldDeltaSum = 0, lgFldDeltaCount = 0;
+  for (const t of teams.values()) {
+    for (const e of t.pitchingEvents) {
+      if (NOT_BATTED_BALL.has(e[1]) || e[5] == null) continue;
+      lgFldDeltaSum += (e[5] - e[2]);
+      lgFldDeltaCount++;
+    }
+  }
+  const lgFldBias = lgFldDeltaCount > 0 ? lgFldDeltaSum / lgFldDeltaCount : 0;
+
   for (const t of teams.values()) {
     t.battingEvents.sort(evtSort);
     t.pitchingEvents.sort(evtSort);
@@ -541,12 +555,11 @@ function buildTeamRows(mode) {
     t.baserunningEvents = t.baserunningEvents.map(e =>
       [e[0], e[1], round3(curLC.lgwOBA + e[2]), e[3], e[4], e[5], e[6], e[7]]);
     t.baserunningEvents.sort(evtSort);
-    // Aggregate fielding proxy (xwOBA - actual rv) into one event per game date
     const fldByDate = new Map();
     for (const e of t.pitchingEvents) {
       const [date, evt, rv, abNum, team, xw, stadium, hand] = e;
       if (NOT_BATTED_BALL.has(evt) || xw == null) continue;
-      const delta = xw - rv;
+      const delta = (xw - rv) - lgFldBias;
       const cur = fldByDate.get(date);
       if (cur) { cur.sum += delta; cur.count++; }
       else fldByDate.set(date, { sum: delta, count: 1, abNum, team, stadium, hand });
@@ -713,12 +726,18 @@ function render() {
       const totalPA = batS.pa + pitS.pa;
       const teamBsrPlus = batS.pa > 0 ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * batS.pa) * 100) : null;
       const teamDefPlus = fldStats.length > 0 ? Math.round(fldRunsFromEvts * 10) / 10 : null;
+      const batActualR = batStats.reduce((s, e) => s + (e[8] || 0), 0);
+      const pitActualR = pitStats.reduce((s, e) => s + (e[8] || 0), 0);
+      const netRunsPlus = totalPA > 0
+        ? Math.round(100 + (batActualR - pitActualR) / (curLC.lgRPA * totalPA) * 100)
+        : null;
       rows.push({
         ...p, ...batS,
         owrc_plus: pitS.wrc_plus,
         bsr_plus: teamBsrPlus,
         def_plus: teamDefPlus,
         fld_runs: Math.round(fldRunsFromEvts * 10) / 10,
+        net_runs_plus: netRunsPlus,
         net_wrc_plus: totalPA > 0
           ? Math.round(100 + totalRAA / (curLC.lgRPA * totalPA) * 100)
           : null,
@@ -851,6 +870,7 @@ function render() {
         <td class="col-name" title="${r.name}"><span class="expand-arrow${expanded ? ' open' : ''}">▶</span> ${r.name}</td>
         <td class="col-team"></td>
         <td class="col-num">${r.net_wrc_plus ?? '–'}</td>
+        <td class="col-num">${r.net_runs_plus ?? '–'}</td>
         <td class="col-num">${r.wrc_plus ?? '–'}</td>
         <td class="col-num">${r.owrc_plus ?? '–'}</td>
         <td class="col-num">${r.xwoba.toFixed(3)}</td>
@@ -889,6 +909,7 @@ function render() {
           <td class="col-name"><span class="expand-arrow${offExpanded ? ' open' : ''}">▶</span> Offense</td>
           <td class="col-team"></td>
           <td class="col-num">–</td>
+          <td class="col-num">–</td>
           <td class="col-num">${r.wrc_plus ?? '–'}</td>
           <td class="col-num">–</td>
           <td class="col-num">${r.xwoba.toFixed(3)}</td>
@@ -918,6 +939,7 @@ function render() {
           <td class="col-rank"></td>
           <td class="col-name" style="padding-left:28px"><span class="expand-arrow${hitExpanded ? ' open' : ''}">▶</span> Hitting</td>
           <td class="col-team"></td>
+          <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${r.wrc_plus ?? '–'}</td>
           <td class="col-num">–</td>
@@ -956,6 +978,7 @@ function render() {
               <td class="col-name" title="${pr.name}">${pr.name}</td>
               <td class="col-team">${pr.team || ''}</td>
               <td class="col-num">–</td>
+              <td class="col-num">–</td>
               <td class="col-num">${pr.wrc_plus}</td>
               <td class="col-num">–</td>
               <td class="col-num">${pr.xwoba.toFixed(3)}</td>
@@ -978,6 +1001,7 @@ function render() {
           <td class="col-rank"></td>
           <td class="col-name" style="padding-left:28px"><span class="expand-arrow${bsrExpanded ? ' open' : ''}">▶</span> Baserunning</td>
           <td class="col-team"></td>
+          <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${bsrPlus}</td>
           <td class="col-num">–</td>
@@ -1021,6 +1045,7 @@ function render() {
               <td class="col-name" title="${pr.name}">${pr.name}</td>
               <td class="col-team">${pr.team || ''}</td>
               <td class="col-num">–</td>
+              <td class="col-num">–</td>
               <td class="col-num">${pr.bsr_plus}</td>
               <td class="col-num">–</td>
               <td class="col-num">–</td>
@@ -1049,6 +1074,7 @@ function render() {
           <td class="col-rank"></td>
           <td class="col-name"><span class="expand-arrow${defenseExpanded ? ' open' : ''}">▶</span> Defense</td>
           <td class="col-team"></td>
+          <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${r.owrc_plus ?? '–'}</td>
@@ -1080,6 +1106,7 @@ function render() {
           <td class="col-rank"></td>
           <td class="col-name" style="padding-left:28px"><span class="expand-arrow${spExpanded ? ' open' : ''}">▶</span> Starting Pitching</td>
           <td class="col-team"></td>
+          <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${spS.pa > 0 ? spS.wrc_plus : '–'}</td>
@@ -1121,6 +1148,7 @@ function render() {
               <td class="col-team">${pr.team || ''}</td>
               <td class="col-num">–</td>
               <td class="col-num">–</td>
+              <td class="col-num">–</td>
               <td class="col-num">${pr.owrc_plus}</td>
               <td class="col-num">${pr.xwoba.toFixed(3)}</td>
               <td class="col-num">${pr.pa}</td>
@@ -1142,6 +1170,7 @@ function render() {
           <td class="col-rank"></td>
           <td class="col-name" style="padding-left:28px"><span class="expand-arrow${rpExpanded ? ' open' : ''}">▶</span> Relief Pitching</td>
           <td class="col-team"></td>
+          <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${rpS.pa > 0 ? rpS.wrc_plus : '–'}</td>
@@ -1183,6 +1212,7 @@ function render() {
               <td class="col-team">${pr.team || ''}</td>
               <td class="col-num">–</td>
               <td class="col-num">–</td>
+              <td class="col-num">–</td>
               <td class="col-num">${pr.owrc_plus}</td>
               <td class="col-num">${pr.xwoba.toFixed(3)}</td>
               <td class="col-num">${pr.pa}</td>
@@ -1208,6 +1238,7 @@ function render() {
           <td class="col-rank"></td>
           <td class="col-name" style="padding-left:28px"><span class="expand-arrow${defExpanded ? ' open' : ''}">▶</span> Fielding</td>
           <td class="col-team"></td>
+          <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${defPlus}</td>
           <td class="col-num">–</td>
@@ -1257,6 +1288,7 @@ function render() {
               <td class="col-name" title="${pr.name}">${pr.name}</td>
               <td class="col-team">${pr.team || ''}</td>
               <td class="col-num">–</td>
+              <td class="col-num">–</td>
               <td class="col-num">${pr.def_plus}</td>
               <td class="col-num">–</td>
               <td class="col-num">–</td>
@@ -1278,6 +1310,7 @@ function render() {
         <td class="col-rank">${i + 1}</td>
         <td class="col-name" title="${r.name}">${badge}${r.name}</td>
         <td class="col-team">${r.team}</td>
+        <td class="col-num">–</td>
         <td class="col-num">–</td>
         <td class="col-num">${r.wrc_plus ?? '–'}</td>
         <td class="col-num">${r.owrc_plus ?? '–'}</td>
