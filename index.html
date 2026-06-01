@@ -973,6 +973,7 @@ function render() {
         canvasMap.set(hitTr.querySelector('canvas'), {
           _displayEvts: r._battingDisplayEvts, _statEvts: r._battingStatEvts,
           _paCount: r._paCount, isPitcher: false,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
         });
 
         if (hitExpanded) {
@@ -1035,6 +1036,7 @@ function render() {
         canvasMap.set(bsrTr.querySelector('canvas'), {
           _displayEvts: r._bsrDisplayEvts, _statEvts: r._bsrStatEvts,
           _paCount: r._paCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
         });
 
         if (bsrExpanded) {
@@ -1141,6 +1143,7 @@ function render() {
         canvasMap.set(spTr.querySelector('canvas'), {
           _displayEvts: r._spDisplayEvts, _statEvts: r._spStatEvts,
           _paCount: r._paCount, isPitcher: true,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
         });
 
         if (spExpanded) {
@@ -1205,6 +1208,7 @@ function render() {
         canvasMap.set(rpTr.querySelector('canvas'), {
           _displayEvts: r._rpDisplayEvts, _statEvts: r._rpStatEvts,
           _paCount: r._paCount, isPitcher: true,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
         });
 
         if (rpExpanded) {
@@ -1273,6 +1277,7 @@ function render() {
         canvasMap.set(defTr.querySelector('canvas'), {
           _displayEvts: r._fldDisplayEvts, _statEvts: r._fldStatEvts,
           _paCount: r._paCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
         });
 
         if (defExpanded) {
