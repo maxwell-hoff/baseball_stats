@@ -1822,7 +1822,6 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   let batActualR = 0, pitActualR = 0;
   const netWin = [];
   const netWrcPts = [], netRunsPts = [];
-  const offRPts = [], defRAPts = [];
 
   for (const { e, src } of merged) {
     const [dateStr, evt, rv, , , , stadium, hand] = e;
@@ -1883,20 +1882,10 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
       // Net Runs+ (actual runs scored minus runs allowed, scaled to 100)
       const batRAboveAvg = batActualR - curLC.lgRPA * batPC;
       const pitRAboveAvg = pitActualR - curLC.lgRPA * pitPC;
-      const netActual = batRAboveAvg - pitRAboveAvg + bsrAcc + fldAcc;
+      const netActual = batRAboveAvg - pitRAboveAvg;
       const nruns = 100 + netActual / (curLC.lgRPA * totalPA) * 100;
       netRunsPts.push({ x, date: dateStr, wrcPlus: nruns, paNum: netWin.length, type: 'net-runs' });
 
-      // Offense R+ (actual runs scored, scaled to 100)
-      if (batPC > 0) {
-        const offR = 100 + batRAboveAvg / (curLC.lgRPA * batPC) * 100;
-        offRPts.push({ x, date: dateStr, wrcPlus: offR, paNum: netWin.length, type: 'off-r' });
-      }
-      // Defense RA+ (actual runs allowed inverted, scaled to 100; higher = fewer runs allowed = better)
-      if (pitPC > 0) {
-        const defRA = 200 - (100 + pitRAboveAvg / (curLC.lgRPA * pitPC) * 100);
-        defRAPts.push({ x, date: dateStr, wrcPlus: defRA, paNum: netWin.length, type: 'def-ra' });
-      }
     }
   }
 
@@ -1919,26 +1908,6 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
 
-  // ── draw Offense R+ line (solid blue) ──
-  const offLine = offRPts.map(p => ({ ...p, y: yScaleWrc(p.wrcPlus) }));
-  if (offLine.length > 1) {
-    ctx.beginPath(); ctx.moveTo(offLine[0].x, offLine[0].y);
-    for (let i = 1; i < offLine.length; i++) ctx.lineTo(offLine[i].x, offLine[i].y);
-    ctx.strokeStyle = WRC_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.55;
-    ctx.setLineDash([6, 3]);
-    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
-  }
-
-  // ── draw Defense RA+ line (solid rose) ──
-  const defLine = defRAPts.map(p => ({ ...p, y: yScaleWrc(p.wrcPlus) }));
-  if (defLine.length > 1) {
-    ctx.beginPath(); ctx.moveTo(defLine[0].x, defLine[0].y);
-    for (let i = 1; i < defLine.length; i++) ctx.lineTo(defLine[i].x, defLine[i].y);
-    ctx.strokeStyle = OWRC_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.55;
-    ctx.setLineDash([6, 3]);
-    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
-  }
-
   // ── legend (only metrics present on this chart) ──
   const legendItems = [];
   for (const layer of barLayers) {
@@ -1955,17 +1924,11 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   if (nrunsLine.length > 1) {
     legendItems.push({ color: XWOBA_LINE_COLOR, label: 'Net Runs+', prefix: '┄ ' });
   }
-  if (offLine.length > 1) {
-    legendItems.push({ color: WRC_LINE_COLOR, label: 'Off R+', prefix: '╌ ' });
-  }
-  if (defLine.length > 1) {
-    legendItems.push({ color: OWRC_LINE_COLOR, label: 'Def RA+', prefix: '╌ ' });
-  }
   drawCanvasLegend(ctx, pad, legendItems);
 
   pointsMap.set(canvas, pts);
-  lineMap.set(canvas, [...nwrcLine, ...offLine]);
-  xLineMap.set(canvas, [...nrunsLine, ...defLine]);
+  lineMap.set(canvas, nwrcLine);
+  xLineMap.set(canvas, nrunsLine);
 }
 
 /* ================================================================
