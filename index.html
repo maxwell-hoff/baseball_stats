@@ -67,22 +67,23 @@
   .hidden{display:none !important}
 
   /* ── Legend ─────────────────────────────────────────────────── */
-  .legend{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:18px;font-size:12px;color:#4b5563}
-  .legend-item{display:flex;align-items:center;gap:4px}
-  .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+  .legend{display:none}
 
   /* ── Table ──────────────────────────────────────────────────── */
   .table-wrap{
     background:#fff;border-radius:10px;
-    box-shadow:0 1px 3px rgba(0,0,0,.08);overflow-x:auto;
+    box-shadow:0 1px 3px rgba(0,0,0,.08);
+    overflow:auto;
+    max-height:calc(100vh - 240px);
   }
   table{width:100%;border-collapse:collapse;min-width:960px}
   thead th{
-    position:sticky;top:0;z-index:2;
+    position:sticky;top:0;z-index:3;
     background:#f9fafb;padding:10px 14px;text-align:left;
     font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;
     color:#6b7280;border-bottom:2px solid #e5e7eb;cursor:pointer;user-select:none;
     white-space:nowrap;
+    box-shadow:0 1px 0 #e5e7eb;
   }
   thead th:hover{color:#1a1a2e}
   thead th .arrow{font-size:10px;margin-left:3px;opacity:.5}
@@ -243,18 +244,45 @@ const EVT_TO_PF_KEY = {
   'strikeout': 'SO', 'strikeout_double_play': 'SO',
 };
 
-const LEGEND_ITEMS = [
-  ['HR',  EVENT_COLORS.home_run],
-  ['3B',  EVENT_COLORS.triple],
-  ['2B',  EVENT_COLORS.double],
-  ['1B',  EVENT_COLORS.single],
-  ['BB',  EVENT_COLORS.walk],
-  ['HBP', EVENT_COLORS.hit_by_pitch],
-  ['Out', OUT_COLOR],
-  ['wRC+', WRC_LINE_COLOR],
-  ['oWRC+', OWRC_LINE_COLOR],
-  ['xwOBA', XWOBA_LINE_COLOR],
+const EVENT_LEGEND_ORDER = [
+  ['home_run', 'HR'], ['triple', '3B'], ['double', '2B'], ['single', '1B'],
+  ['walk', 'BB'], ['intent_walk', 'BB'], ['hit_by_pitch', 'HBP'],
+  ['stolen_base', 'SB'], ['caught_stealing', 'CS'], ['fielding', 'Fielding'],
 ];
+
+function drawCanvasLegend(ctx, pad, items) {
+  if (!items.length) return;
+  ctx.font = '8px sans-serif';
+  ctx.globalAlpha = 0.65;
+  ctx.textAlign = 'left';
+  let cx = pad.left + 2;
+  const cy = pad.top + 8;
+  for (const { color, label, prefix } of items) {
+    ctx.fillStyle = color;
+    const text = (prefix || '■ ') + label;
+    ctx.fillText(text, cx, cy);
+    cx += ctx.measureText(text).width + 6;
+  }
+  ctx.globalAlpha = 1;
+}
+
+function eventLegendItems(displayEvents) {
+  const present = new Set(displayEvents.map(e => e[1]));
+  const items = [];
+  const added = new Set();
+  for (const [evt, label] of EVENT_LEGEND_ORDER) {
+    if (!present.has(evt) || added.has(label)) continue;
+    added.add(label);
+    const color = evt === 'fielding' ? DEF_BAR_COLOR : (EVENT_COLORS[evt] || OUT_COLOR);
+    items.push({ color, label });
+  }
+  const hasOut = [...present].some(evt =>
+    evt !== 'fielding' && !EVENT_COLORS[evt] && evt !== 'stolen_base' && evt !== 'caught_stealing');
+  if (hasOut && !added.has('Out')) {
+    items.push({ color: OUT_COLOR, label: 'Out' });
+  }
+  return items;
+}
 
 /* ================================================================
    STATE
@@ -293,7 +321,6 @@ let PARK_FACTORS = null;
    BOOT
    ================================================================ */
 document.addEventListener('DOMContentLoaded', async () => {
-  buildLegend();
   try {
     const resp = await fetch('data/player_data.json');
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -380,19 +407,6 @@ function buildYearButtons(years) {
     });
     wrap.appendChild(btn);
   }
-}
-
-/* ================================================================
-   LEGEND
-   ================================================================ */
-function buildLegend() {
-  const el = document.getElementById('legend');
-  el.innerHTML = LEGEND_ITEMS.map(([label, color]) => {
-    if (label === 'wRC+' || label === 'oWRC+') {
-      return `<div class="legend-item"><span style="width:16px;height:2px;background:${color};border-radius:1px"></span>${label}</div>`;
-    }
-    return `<div class="legend-item"><span class="dot" style="background:${color}"></span>${label}</div>`;
-  }).join('');
 }
 
 /* ================================================================
@@ -1638,6 +1652,26 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
     ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
 
+  const legendItems = eventLegendItems(displayEvents);
+  if (linePoints.length > 1) {
+    legendItems.push({
+      color: isPitcher ? OWRC_LINE_COLOR : WRC_LINE_COLOR,
+      label: isPitcher ? 'oWRC+' : 'wRC+',
+      prefix: '— ',
+    });
+  }
+  if (xLinePoints.length > 1) {
+    legendItems.push({ color: XWOBA_LINE_COLOR, label: 'xwOBA', prefix: '┄ ' });
+  }
+  if (runsLinePoints.length > 1) {
+    legendItems.push({
+      color: '#f97316',
+      label: isPitcher ? 'RA+' : 'R+',
+      prefix: '┄ ',
+    });
+  }
+  drawCanvasLegend(ctx, pad, legendItems);
+
   pointsMap.set(canvas, pts);
   lineMap.set(canvas, linePoints);
   xLineMap.set(canvas, [...xLinePoints, ...runsLinePoints]);
@@ -1905,22 +1939,29 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
 
-  // ── legend (horizontal, left-aligned) ──
-  ctx.font = '8px sans-serif'; ctx.globalAlpha = 0.6; ctx.textAlign = 'left';
-  const legendItems = [
-    [WRC_LINE_COLOR, '■ Hitting'], [OWRC_LINE_COLOR, '■ SP'],
-    [RP_BAR_COLOR, '■ RP'], [BSR_BAR_COLOR, '■ Baserun'], [DEF_BAR_COLOR, '■ Fielding'],
-    ['#1e1b4b', '— Net wRC+'], [XWOBA_LINE_COLOR, '┄ Net Runs+'],
-    [WRC_LINE_COLOR, '╌ Off R+'], [OWRC_LINE_COLOR, '╌ Def RA+'],
-  ];
-  let legendCx = pad.left + 2;
-  const legendCy = pad.top + 8;
-  for (const [c, label] of legendItems) {
-    ctx.fillStyle = c;
-    ctx.fillText(label, legendCx, legendCy);
-    legendCx += ctx.measureText(label).width + 6;
+  // ── legend (only metrics present on this chart) ──
+  const legendItems = [];
+  for (const layer of barLayers) {
+    const hasData = [...layer.sums.values()].some(v => v > 0);
+    if (!hasData) continue;
+    const labels = {
+      bat: 'Hitting', sp: 'SP', rp: 'RP', bsr: 'Baserun', fld: 'Fielding',
+    };
+    legendItems.push({ color: layer.color, label: labels[layer.side] });
   }
-  ctx.globalAlpha = 1;
+  if (nwrcLine.length > 1) {
+    legendItems.push({ color: '#1e1b4b', label: 'Net wRC+', prefix: '— ' });
+  }
+  if (nrunsLine.length > 1) {
+    legendItems.push({ color: XWOBA_LINE_COLOR, label: 'Net Runs+', prefix: '┄ ' });
+  }
+  if (offLine.length > 1) {
+    legendItems.push({ color: WRC_LINE_COLOR, label: 'Off R+', prefix: '╌ ' });
+  }
+  if (defLine.length > 1) {
+    legendItems.push({ color: OWRC_LINE_COLOR, label: 'Def RA+', prefix: '╌ ' });
+  }
+  drawCanvasLegend(ctx, pad, legendItems);
 
   pointsMap.set(canvas, pts);
   lineMap.set(canvas, [...nwrcLine, ...offLine]);
