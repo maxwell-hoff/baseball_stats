@@ -941,6 +941,7 @@ function render() {
         canvasMap.set(offTr.querySelector('canvas'), {
           _displayEvts: r._offDisplayEvts, _statEvts: r._offStatEvts,
           _paCount: r._paCount, isPitcher: false,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
         });
 
         if (offExpanded) {
@@ -1107,6 +1108,7 @@ function render() {
         canvasMap.set(defenseTr.querySelector('canvas'), {
           _displayEvts: r._defDisplayEvts, _statEvts: r._defStatEvts,
           _paCount: r._paCount, isPitcher: true,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
         });
 
         if (defenseExpanded) {
@@ -1386,7 +1388,7 @@ function drawAllCharts() {
     if (row.isTeamRow) {
       drawTeamChart(ctx, canvas, row, cssW, cssH, row._paCount);
     } else {
-      drawChart(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH, row._paCount, row.isPitcher, row._runsOffset);
+      drawChart(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH, row._paCount, row.isPitcher, row._runsOffset, row);
     }
   });
 }
@@ -1403,7 +1405,7 @@ const BAR_STACK_ORDER = [
   'stolen_base',
 ];
 
-function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitcher, runsOffset) {
+function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitcher, runsOffset, options = {}) {
   const pad = { top: 4, right: 30, bottom: 12, left: 6 };
   const pw = w - pad.left - pad.right;
   const ph = h - pad.top - pad.bottom;
@@ -1610,7 +1612,7 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
       if (isPitcher) wrcPlus = 200 - wrcPlus;
       linePoints.push({ x, y: yScaleWrc(wrcPlus), wrcPlus, paNum: win.length, date: dateStr });
 
-      if (!isSparse) {
+      if (!isSparse && !options._hideXwoba) {
         const xw2 = xwobaNumer / xwobaDenom;
         const xWraa = (xw2 - curLC.lgwOBA) / curLC.wOBAScale;
         let xWrcPlus = ((xWraa + curLC.lgRPA) / curLC.lgRPA) * 100;
@@ -1652,7 +1654,7 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
     ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
 
-  const legendItems = eventLegendItems(displayEvents);
+  const legendItems = options._lineOnlyLegend ? [] : eventLegendItems(displayEvents);
   if (linePoints.length > 1) {
     legendItems.push({
       color: isPitcher ? OWRC_LINE_COLOR : WRC_LINE_COLOR,
@@ -1666,7 +1668,7 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
   if (runsLinePoints.length > 1) {
     legendItems.push({
       color: '#f97316',
-      label: isPitcher ? 'RA+' : 'R+',
+      label: options._runsLabel || (isPitcher ? 'RA+' : 'R+'),
       prefix: '┄ ',
     });
   }
