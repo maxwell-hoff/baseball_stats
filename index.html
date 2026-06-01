@@ -129,7 +129,7 @@
 <body>
 
 <div class="header">
-  <h1>MLB Plate Appearance Dashboard</h1>
+  <h1>Intuitive Wins</h1>
   <div class="meta">
     <span id="season"></span>
     &nbsp;·&nbsp; <span id="updated"></span>
@@ -635,6 +635,84 @@ function computeStats(events, isPitcher) {
   return { pa, hits, walks, woba, wrc_plus, xwoba };
 }
 
+function computeTeamNetMetricPoints(batEvents, pitEvents, bsrEvents, fldEvents, paCount) {
+  const merged = [];
+  for (const e of batEvents || []) merged.push({ e, src: 'bat' });
+  for (const e of pitEvents || []) merged.push({ e, src: 'pit' });
+  for (const e of bsrEvents || []) merged.push({ e, src: 'bsr' });
+  for (const e of fldEvents || []) merged.push({ e, src: 'fld' });
+  merged.sort((a, b) => a.e[0] < b.e[0] ? -1 : a.e[0] > b.e[0] ? 1 : a.e[3] - b.e[3]);
+
+  const useRolling = viewMode === 'pa';
+  let batWN = 0, batWD = 0, batPFS = 0, batPFC = 0, batPC = 0;
+  let pitWN = 0, pitWD = 0, pitPFS = 0, pitPFC = 0, pitPC = 0;
+  let bsrAcc = 0, fldAcc = 0;
+  let batActualR = 0, pitActualR = 0;
+  const netWin = [];
+  const points = [];
+
+  for (const { e, src } of merged) {
+    const [dateStr, evt, rv, , , , stadium, hand] = e;
+    const inD = !WOBA_DENOM_EXCLUDE.has(evt);
+    const pf = getParkFactor(stadium, hand, evt);
+    const ar = (src === 'bat' || src === 'pit') ? (e[8] || 0) : 0;
+    const entry = { src, rv, inD, pf, delta: 0, ar };
+
+    if (src === 'bat') {
+      batWN += rv; if (inD) batWD++; batPFS += pf; batPFC++; batPC++;
+      batActualR += ar;
+    } else if (src === 'pit') {
+      pitWN += rv; if (inD) pitWD++; pitPFS += pf; pitPFC++; pitPC++;
+      pitActualR += ar;
+    } else {
+      entry.delta = rv - curLC.lgwOBA;
+      if (src === 'bsr') bsrAcc += entry.delta;
+      else fldAcc += entry.delta;
+    }
+    netWin.push(entry);
+
+    if (useRolling) {
+      while (netWin.length > paCount) {
+        const o = netWin.shift();
+        if (o.src === 'bat') { batWN -= o.rv; if (o.inD) batWD--; batPFS -= o.pf; batPFC--; batPC--; batActualR -= o.ar; }
+        else if (o.src === 'pit') { pitWN -= o.rv; if (o.inD) pitWD--; pitPFS -= o.pf; pitPFC--; pitPC--; pitActualR -= o.ar; }
+        else if (o.src === 'bsr') bsrAcc -= o.delta;
+        else fldAcc -= o.delta;
+      }
+    }
+
+    const totalPA = batPC + pitPC;
+    const minP = useRolling ? Math.min(paCount, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA;
+    if (netWin.length >= minP && totalPA > 0 && (batWD > 0 || pitWD > 0)) {
+      let batWrc = 100;
+      if (batWD > 0) {
+        const w = batWN / batWD;
+        const wraa = (w - curLC.lgwOBA) / curLC.wOBAScale;
+        const mpf = batPFC > 0 ? batPFS / batPFC : 1.0;
+        batWrc = ((wraa + curLC.lgRPA + (curLC.lgRPA - mpf * curLC.lgRPA)) / curLC.lgRPA) * 100;
+      }
+      let oWrc = 100;
+      if (pitWD > 0) {
+        const w = pitWN / pitWD;
+        const wraa = (w - curLC.lgwOBA) / curLC.wOBAScale;
+        const mpf = pitPFC > 0 ? pitPFS / pitPFC : 1.0;
+        oWrc = 200 - ((wraa + curLC.lgRPA + (curLC.lgRPA - mpf * curLC.lgRPA)) / curLC.lgRPA) * 100;
+      }
+      const batRAA = (batWrc - 100) / 100 * curLC.lgRPA * batPC;
+      const pitRAA = (oWrc - 100) / 100 * curLC.lgRPA * pitPC;
+      const netWrcPlus = 100 + (batRAA + pitRAA + bsrAcc + fldAcc) / (curLC.lgRPA * totalPA) * 100;
+
+      const batRAboveAvg = batActualR - curLC.lgRPA * batPC;
+      const pitRAboveAvg = pitActualR - curLC.lgRPA * pitPC;
+      const netRunsPlus = 100 + (batRAboveAvg - pitRAboveAvg) / (curLC.lgRPA * totalPA) * 100;
+
+      points.push({ date: dateStr, wrcPlus: netWrcPlus, netRunsPlus, paNum: netWin.length });
+    }
+  }
+
+  return points;
+}
+
 /* ================================================================
    COMPRESSED X-AXIS (skip offseason gaps)
    ================================================================ */
@@ -733,28 +811,27 @@ function render() {
       const fldEntity = { events: p.fieldingEvents || [] };
       const { display: bsrDisplay, stats: bsrStats } = getEventsForEntity(bsrEntity, paCount);
       const { display: fldDisplay, stats: fldStats } = getEventsForEntity(fldEntity, paCount);
-      const batRAA = (batS.wrc_plus - 100) / 100 * curLC.lgRPA * batS.pa;
-      const pitRAA = (pitS.wrc_plus - 100) / 100 * curLC.lgRPA * pitS.pa;
       const fldRunsFromEvts = fldStats.reduce((s, e) => s + (e[2] - curLC.lgwOBA), 0);
-      const totalRAA = batRAA + pitRAA + (p.bsr ?? 0) + fldRunsFromEvts;
-      const totalPA = batS.pa + pitS.pa;
       const teamBsrPlus = batS.pa > 0 ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * batS.pa) * 100) : null;
       const teamDefPlus = fldStats.length > 0 ? Math.round(fldRunsFromEvts * 10) / 10 : null;
-      const batActualR = batStats.reduce((s, e) => s + (e[8] || 0), 0);
-      const pitActualR = pitStats.reduce((s, e) => s + (e[8] || 0), 0);
-      const netRunsPlus = totalPA > 0
-        ? Math.round(100 + (batActualR - pitActualR) / (curLC.lgRPA * totalPA) * 100)
-        : null;
+      const netMetricSource = {
+        bat: viewMode === 'pa' ? batDisplay : batStats,
+        pit: viewMode === 'pa' ? pitDisplay : pitStats,
+        bsr: viewMode === 'pa' ? bsrDisplay : bsrStats,
+        fld: viewMode === 'pa' ? fldDisplay : fldStats,
+      };
+      const netMetricPts = computeTeamNetMetricPoints(
+        netMetricSource.bat, netMetricSource.pit, netMetricSource.bsr, netMetricSource.fld, paCount
+      );
+      const lastNetMetric = netMetricPts.length ? netMetricPts[netMetricPts.length - 1] : null;
       rows.push({
         ...p, ...batS,
         owrc_plus: pitS.wrc_plus,
         bsr_plus: teamBsrPlus,
         def_plus: teamDefPlus,
         fld_runs: Math.round(fldRunsFromEvts * 10) / 10,
-        net_runs_plus: netRunsPlus,
-        net_wrc_plus: totalPA > 0
-          ? Math.round(100 + totalRAA / (curLC.lgRPA * totalPA) * 100)
-          : null,
+        net_runs_plus: lastNetMetric ? Math.round(lastNetMetric.netRunsPlus) : null,
+        net_wrc_plus: lastNetMetric ? Math.round(lastNetMetric.wrcPlus) : null,
         pitching_xwoba: pitS.xwoba,
         pitching_pa: pitS.pa,
         _battingDisplayEvts: batDisplay,
@@ -1815,86 +1892,21 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   const batEvtsForLine = viewMode === 'pa' ? batDisplay : batStats;
   const pitEvtsForLine = viewMode === 'pa' ? pitDisplay : pitStats;
 
-  const merged = [];
-  for (const e of batEvtsForLine) merged.push({ e, src: 'bat' });
-  for (const e of pitEvtsForLine) merged.push({ e, src: 'pit' });
-  for (const e of bsrEvts) merged.push({ e, src: 'bsr' });
-  for (const e of fldEvts) merged.push({ e, src: 'fld' });
-  merged.sort((a, b) => a.e[0] < b.e[0] ? -1 : a.e[0] > b.e[0] ? 1 : a.e[3] - b.e[3]);
-
-  const useRolling = viewMode === 'pa';
-  let batWN = 0, batWD = 0, batPFS = 0, batPFC = 0, batPC = 0;
-  let pitWN = 0, pitWD = 0, pitPFS = 0, pitPFC = 0, pitPC = 0;
-  let bsrAcc = 0, fldAcc = 0;
-  let batActualR = 0, pitActualR = 0;
-  const netWin = [];
-  const netWrcPts = [], netRunsPts = [];
-
-  for (const { e, src } of merged) {
-    const [dateStr, evt, rv, , , , stadium, hand] = e;
-    const inD = !WOBA_DENOM_EXCLUDE.has(evt);
-    const pf = getParkFactor(stadium, hand, evt);
-    const ar = (src === 'bat' || src === 'pit') ? (e[8] || 0) : 0;
-    const entry = { src, rv, inD, pf, delta: 0, ar };
-
-    if (src === 'bat') {
-      batWN += rv; if (inD) batWD++; batPFS += pf; batPFC++; batPC++;
-      batActualR += ar;
-    } else if (src === 'pit') {
-      pitWN += rv; if (inD) pitWD++; pitPFS += pf; pitPFC++; pitPC++;
-      pitActualR += ar;
-    } else {
-      entry.delta = rv - curLC.lgwOBA;
-      if (src === 'bsr') bsrAcc += entry.delta;
-      else fldAcc += entry.delta;
-    }
-    netWin.push(entry);
-
-    if (useRolling) {
-      while (netWin.length > paCount) {
-        const o = netWin.shift();
-        if (o.src === 'bat') { batWN -= o.rv; if (o.inD) batWD--; batPFS -= o.pf; batPFC--; batPC--; batActualR -= o.ar; }
-        else if (o.src === 'pit') { pitWN -= o.rv; if (o.inD) pitWD--; pitPFS -= o.pf; pitPFC--; pitPC--; pitActualR -= o.ar; }
-        else if (o.src === 'bsr') bsrAcc -= o.delta;
-        else fldAcc -= o.delta;
-      }
-    }
-
-    const totalPA = batPC + pitPC;
-    const minP = useRolling ? Math.min(paCount, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA;
-    if (netWin.length >= minP && totalPA > 0 && (batWD > 0 || pitWD > 0)) {
-      const t = new Date(dateStr + 'T12:00:00').getTime();
-      const x = xScale(t);
-
-      // Net wRC+ (park-adjusted, wOBA-based expected performance)
-      let batWrc = 100;
-      if (batWD > 0) {
-        const w = batWN / batWD;
-        const wraa = (w - curLC.lgwOBA) / curLC.wOBAScale;
-        const mpf = batPFC > 0 ? batPFS / batPFC : 1.0;
-        batWrc = ((wraa + curLC.lgRPA + (curLC.lgRPA - mpf * curLC.lgRPA)) / curLC.lgRPA) * 100;
-      }
-      let oWrc = 100;
-      if (pitWD > 0) {
-        const w = pitWN / pitWD;
-        const wraa = (w - curLC.lgwOBA) / curLC.wOBAScale;
-        const mpf = pitPFC > 0 ? pitPFS / pitPFC : 1.0;
-        oWrc = 200 - ((wraa + curLC.lgRPA + (curLC.lgRPA - mpf * curLC.lgRPA)) / curLC.lgRPA) * 100;
-      }
-      const batRAA = (batWrc - 100) / 100 * curLC.lgRPA * batPC;
-      const pitRAA = (oWrc - 100) / 100 * curLC.lgRPA * pitPC;
-      const nwrc = 100 + (batRAA + pitRAA + bsrAcc + fldAcc) / (curLC.lgRPA * totalPA) * 100;
-      netWrcPts.push({ x, date: dateStr, wrcPlus: nwrc, paNum: netWin.length, type: 'net-wrc' });
-
-      // Net Runs+ (actual runs scored minus runs allowed, scaled to 100)
-      const batRAboveAvg = batActualR - curLC.lgRPA * batPC;
-      const pitRAboveAvg = pitActualR - curLC.lgRPA * pitPC;
-      const netActual = batRAboveAvg - pitRAboveAvg;
-      const nruns = 100 + netActual / (curLC.lgRPA * totalPA) * 100;
-      netRunsPts.push({ x, date: dateStr, wrcPlus: nruns, paNum: netWin.length, type: 'net-runs' });
-
-    }
-  }
+  const netMetricPts = computeTeamNetMetricPoints(batEvtsForLine, pitEvtsForLine, bsrEvts, fldEvts, paCount);
+  const netWrcPts = netMetricPts.map(p => ({
+    x: xScale(new Date(p.date + 'T12:00:00').getTime()),
+    date: p.date,
+    wrcPlus: p.wrcPlus,
+    paNum: p.paNum,
+    type: 'net-wrc',
+  }));
+  const netRunsPts = netMetricPts.map(p => ({
+    x: xScale(new Date(p.date + 'T12:00:00').getTime()),
+    date: p.date,
+    wrcPlus: p.netRunsPlus,
+    paNum: p.paNum,
+    type: 'net-runs',
+  }));
 
   // ── draw Net wRC+ line (solid, dark) ──
   const nwrcLine = netWrcPts.map(p => ({ ...p, y: yScaleWrc(p.wrcPlus) }));
