@@ -1908,16 +1908,8 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
 
-  // ── legend (only metrics present on this chart) ──
+  // ── legend: team chart only labels the two summary lines ──
   const legendItems = [];
-  for (const layer of barLayers) {
-    const hasData = [...layer.sums.values()].some(v => v > 0);
-    if (!hasData) continue;
-    const labels = {
-      bat: 'Hitting', sp: 'SP', rp: 'RP', bsr: 'Baserun', fld: 'Fielding',
-    };
-    legendItems.push({ color: layer.color, label: labels[layer.side] });
-  }
   if (nwrcLine.length > 1) {
     legendItems.push({ color: '#1e1b4b', label: 'Net wRC+', prefix: '— ' });
   }
