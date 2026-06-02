@@ -187,7 +187,6 @@
         <th class="col-num" data-key="net_runs_plus">Net Runs+ <span class="arrow"></span></th>
         <th class="col-num" data-key="wrc_plus">wRC+ <span class="arrow"></span></th>
         <th class="col-num" data-key="owrc_plus">oWRC+ <span class="arrow"></span></th>
-        <th class="col-num" data-key="xwoba">xwOBA <span class="arrow"></span></th>
         <th class="col-num" data-key="pa">PA <span class="arrow"></span></th>
         <th class="col-num" data-key="bsr_plus">BsR+ <span class="arrow"></span></th>
         <th class="col-num" data-key="def_plus">DRS <span class="arrow"></span></th>
@@ -879,6 +878,7 @@ function render() {
         bsr_plus: playerBsrP,
         def_plus: null,
         _displayEvts: display, _statEvts: stats, _paCount: paCount, isPitcher,
+        _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
       });
       for (const [d] of display) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
     }
@@ -964,7 +964,6 @@ function render() {
         <td class="col-num">${r.net_runs_plus ?? '–'}</td>
         <td class="col-num">${r.wrc_plus ?? '–'}</td>
         <td class="col-num">${r.owrc_plus ?? '–'}</td>
-        <td class="col-num">${r.xwoba.toFixed(3)}</td>
         <td class="col-num">${r.pa}</td>
         <td class="col-num">${r.bsr_plus ?? '–'}</td>
         <td class="col-num">${r.def_plus ?? '–'}</td>
@@ -1003,7 +1002,6 @@ function render() {
           <td class="col-num">–</td>
           <td class="col-num">${r.wrc_plus ?? '–'}</td>
           <td class="col-num">–</td>
-          <td class="col-num">${r.xwoba.toFixed(3)}</td>
           <td class="col-num">${offPA}</td>
           <td class="col-num">${r.bsr_plus ?? '–'}</td>
           <td class="col-num">–</td>
@@ -1035,7 +1033,6 @@ function render() {
           <td class="col-num">–</td>
           <td class="col-num">${r.wrc_plus ?? '–'}</td>
           <td class="col-num">–</td>
-          <td class="col-num">${r.xwoba.toFixed(3)}</td>
           <td class="col-num">${r.pa}</td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
@@ -1060,7 +1057,11 @@ function render() {
             const { display, stats } = getEventsForEntity(p, playerPaCount);
             if (display.length === 0) continue;
             const s = computeStats(stats, false);
-            hitterRows.push({ ...p, ...s, owrc_plus: null, _displayEvts: display, _statEvts: stats, _paCount: playerPaCount, isPitcher: false });
+            hitterRows.push({
+              ...p, ...s, owrc_plus: null, _displayEvts: display, _statEvts: stats,
+              _paCount: playerPaCount, isPitcher: false,
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+            });
           }
           hitterRows.sort((a, b) => b.wrc_plus - a.wrc_plus);
           for (const pr of hitterRows) {
@@ -1074,7 +1075,6 @@ function render() {
               <td class="col-num">–</td>
               <td class="col-num">${pr.wrc_plus}</td>
               <td class="col-num">–</td>
-              <td class="col-num">${pr.xwoba.toFixed(3)}</td>
               <td class="col-num">${pr.pa}</td>
               <td class="col-num">–</td>
               <td class="col-num">–</td>
@@ -1097,7 +1097,6 @@ function render() {
           <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${bsrPlus}</td>
-          <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${r.pa}</td>
           <td class="col-num">${bsrPlus}</td>
@@ -1128,7 +1127,11 @@ function render() {
             if (display.length === 0) continue;
             const s = computeStats(stats, false);
             const playerBsrPlus = s.pa > 0 ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * s.pa) * 100) : '–';
-            bsrPlayerRows.push({ ...p, ...s, bsr_plus: playerBsrPlus, _displayEvts: bsrD, _statEvts: bsrSt, _paCount: playerPaCount, isPitcher: false, _runsOffset: curLC.lgwOBA });
+            bsrPlayerRows.push({
+              ...p, ...s, bsr_plus: playerBsrPlus, _displayEvts: bsrD, _statEvts: bsrSt,
+              _paCount: playerPaCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+            });
           }
           bsrPlayerRows.sort((a, b) => (b.bsr ?? 0) - (a.bsr ?? 0));
           for (const pr of bsrPlayerRows) {
@@ -1141,7 +1144,6 @@ function render() {
               <td class="col-num">–</td>
               <td class="col-num">–</td>
               <td class="col-num">${pr.bsr_plus}</td>
-              <td class="col-num">–</td>
               <td class="col-num">–</td>
               <td class="col-num">${pr.pa}</td>
               <td class="col-num">${pr.bsr_plus}</td>
@@ -1172,7 +1174,6 @@ function render() {
           <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${r.owrc_plus ?? '–'}</td>
-          <td class="col-num">${r.pitching_xwoba?.toFixed(3) ?? '–'}</td>
           <td class="col-num">${r.pitching_pa ?? 0}</td>
           <td class="col-num">–</td>
           <td class="col-num">${r.def_plus ?? '–'}</td>
@@ -1205,7 +1206,6 @@ function render() {
           <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${spS.pa > 0 ? spS.wrc_plus : '–'}</td>
-          <td class="col-num">${spS.pa > 0 ? spS.xwoba.toFixed(3) : '–'}</td>
           <td class="col-num">${spS.pa}</td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
@@ -1232,7 +1232,12 @@ function render() {
             const { sp: spEvts } = splitPitcherEvents(display);
             if (spEvts.length === 0) continue;
             const s = computeStats(spEvts, true);
-            spRows.push({ ...p, ...s, wrc_plus: null, owrc_plus: s.wrc_plus, _displayEvts: spEvts, _statEvts: spEvts, _paCount: playerPaCount, isPitcher: true });
+            spRows.push({
+              ...p, ...s, wrc_plus: null, owrc_plus: s.wrc_plus,
+              _displayEvts: spEvts, _statEvts: spEvts,
+              _paCount: playerPaCount, isPitcher: true,
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+            });
           }
           spRows.sort((a, b) => (b.owrc_plus ?? 0) - (a.owrc_plus ?? 0));
           for (const pr of spRows) {
@@ -1246,7 +1251,6 @@ function render() {
               <td class="col-num">–</td>
               <td class="col-num">–</td>
               <td class="col-num">${pr.owrc_plus}</td>
-              <td class="col-num">${pr.xwoba.toFixed(3)}</td>
               <td class="col-num">${pr.pa}</td>
               <td class="col-num">–</td>
               <td class="col-num">–</td>
@@ -1270,7 +1274,6 @@ function render() {
           <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${rpS.pa > 0 ? rpS.wrc_plus : '–'}</td>
-          <td class="col-num">${rpS.pa > 0 ? rpS.xwoba.toFixed(3) : '–'}</td>
           <td class="col-num">${rpS.pa}</td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
@@ -1297,7 +1300,12 @@ function render() {
             const { rp: rpEvts } = splitPitcherEvents(display);
             if (rpEvts.length === 0) continue;
             const s = computeStats(rpEvts, true);
-            rpRows.push({ ...p, ...s, wrc_plus: null, owrc_plus: s.wrc_plus, _displayEvts: rpEvts, _statEvts: rpEvts, _paCount: playerPaCount, isPitcher: true });
+            rpRows.push({
+              ...p, ...s, wrc_plus: null, owrc_plus: s.wrc_plus,
+              _displayEvts: rpEvts, _statEvts: rpEvts,
+              _paCount: playerPaCount, isPitcher: true,
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+            });
           }
           rpRows.sort((a, b) => (b.owrc_plus ?? 0) - (a.owrc_plus ?? 0));
           for (const pr of rpRows) {
@@ -1311,7 +1319,6 @@ function render() {
               <td class="col-num">–</td>
               <td class="col-num">–</td>
               <td class="col-num">${pr.owrc_plus}</td>
-              <td class="col-num">${pr.xwoba.toFixed(3)}</td>
               <td class="col-num">${pr.pa}</td>
               <td class="col-num">–</td>
               <td class="col-num">–</td>
@@ -1338,7 +1345,6 @@ function render() {
           <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${defPlus}</td>
-          <td class="col-num">–</td>
           <td class="col-num">–</td>
           <td class="col-num">${fldPA}</td>
           <td class="col-num">–</td>
@@ -1375,6 +1381,7 @@ function render() {
               ...p, ...s, def_plus: playerDefPlus, def_runs_computed: playerFldRunsRd,
               _displayEvts: playerFldEvts, _statEvts: playerFldEvts,
               _paCount: playerPaCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
             });
           }
           defPlayerRows.sort((a, b) => (b.def_runs_computed ?? 0) - (a.def_runs_computed ?? 0));
@@ -1388,7 +1395,6 @@ function render() {
               <td class="col-num">–</td>
               <td class="col-num">–</td>
               <td class="col-num">${pr.def_plus}</td>
-              <td class="col-num">–</td>
               <td class="col-num">–</td>
               <td class="col-num">${pr.pa}</td>
               <td class="col-num">–</td>
@@ -1412,7 +1418,6 @@ function render() {
         <td class="col-num">–</td>
         <td class="col-num">${r.wrc_plus ?? '–'}</td>
         <td class="col-num">${r.owrc_plus ?? '–'}</td>
-        <td class="col-num">${r.xwoba.toFixed(3)}</td>
         <td class="col-num">${r.pa}</td>
         <td class="col-num">${r.bsr_plus ?? '–'}</td>
         <td class="col-num">${r.def_plus ?? '–'}</td>
