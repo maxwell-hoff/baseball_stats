@@ -186,7 +186,7 @@
         <th class="col-name" data-key="name">Player <span class="arrow"></span></th>
         <th class="col-team">Team</th>
         <th class="col-num" data-key="net_wrc_plus">Net wRC+ <span class="arrow"></span></th>
-        <th class="col-num" data-key="net_runs_plus">Net Runs+ <span class="arrow"></span></th>
+        <th class="col-num" data-key="net_runs_plus">Net Runs (scaled) <span class="arrow"></span></th>
         <th class="col-num" data-key="wrc_plus">wRC+ <span class="arrow"></span></th>
         <th class="col-num" data-key="owrc_plus">oWRC+ <span class="arrow"></span></th>
         <th class="col-num" data-key="pa">PA <span class="arrow"></span></th>
@@ -880,7 +880,7 @@ function render() {
         bsr_plus: playerBsrP,
         def_plus: null,
         _displayEvts: display, _statEvts: stats, _paCount: paCount, isPitcher,
-        _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+        _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
       });
       for (const [d] of display) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
     }
@@ -1017,7 +1017,7 @@ function render() {
         canvasMap.set(offTr.querySelector('canvas'), {
           _displayEvts: r._offDisplayEvts, _statEvts: r._offStatEvts,
           _paCount: r._paCount, isPitcher: false,
-          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
         });
 
         if (offExpanded) {
@@ -1048,7 +1048,7 @@ function render() {
         canvasMap.set(hitTr.querySelector('canvas'), {
           _displayEvts: r._battingDisplayEvts, _statEvts: r._battingStatEvts,
           _paCount: r._paCount, isPitcher: false,
-          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
         });
 
         if (hitExpanded) {
@@ -1061,7 +1061,7 @@ function render() {
             hitterRows.push({
               ...p, ...s, owrc_plus: null, _displayEvts: display, _statEvts: stats,
               _paCount: playerPaCount, isPitcher: false,
-              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
             });
           }
           hitterRows.sort((a, b) => b.wrc_plus - a.wrc_plus);
@@ -1113,7 +1113,7 @@ function render() {
         canvasMap.set(bsrTr.querySelector('canvas'), {
           _displayEvts: r._bsrDisplayEvts, _statEvts: r._bsrStatEvts,
           _paCount: r._paCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
-          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
         });
 
         if (bsrExpanded) {
@@ -1131,7 +1131,7 @@ function render() {
             bsrPlayerRows.push({
               ...p, ...s, bsr_plus: playerBsrPlus, _displayEvts: bsrD, _statEvts: bsrSt,
               _paCount: playerPaCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
-              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
             });
           }
           bsrPlayerRows.sort((a, b) => (b.bsr ?? 0) - (a.bsr ?? 0));
@@ -1188,7 +1188,7 @@ function render() {
         canvasMap.set(defenseTr.querySelector('canvas'), {
           _displayEvts: r._defDisplayEvts, _statEvts: r._defStatEvts,
           _paCount: r._paCount, isPitcher: true,
-          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
         });
 
         if (defenseExpanded) {
@@ -1220,7 +1220,7 @@ function render() {
         canvasMap.set(spTr.querySelector('canvas'), {
           _displayEvts: r._spDisplayEvts, _statEvts: r._spStatEvts,
           _paCount: r._paCount, isPitcher: true,
-          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
         });
 
         if (spExpanded) {
@@ -1236,7 +1236,7 @@ function render() {
               ...p, ...s, wrc_plus: null, owrc_plus: s.wrc_plus,
               _displayEvts: spEvts, _statEvts: spEvts,
               _paCount: playerPaCount, isPitcher: true,
-              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
             });
           }
           spRows.sort((a, b) => (b.owrc_plus ?? 0) - (a.owrc_plus ?? 0));
@@ -1288,7 +1288,7 @@ function render() {
         canvasMap.set(rpTr.querySelector('canvas'), {
           _displayEvts: r._rpDisplayEvts, _statEvts: r._rpStatEvts,
           _paCount: r._paCount, isPitcher: true,
-          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
         });
 
         if (rpExpanded) {
@@ -1304,7 +1304,7 @@ function render() {
               ...p, ...s, wrc_plus: null, owrc_plus: s.wrc_plus,
               _displayEvts: rpEvts, _statEvts: rpEvts,
               _paCount: playerPaCount, isPitcher: true,
-              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
             });
           }
           rpRows.sort((a, b) => (b.owrc_plus ?? 0) - (a.owrc_plus ?? 0));
@@ -1360,7 +1360,7 @@ function render() {
         canvasMap.set(defTr.querySelector('canvas'), {
           _displayEvts: r._fldDisplayEvts, _statEvts: r._fldStatEvts,
           _paCount: r._paCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
-          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
         });
 
         if (defExpanded) {
@@ -1381,7 +1381,7 @@ function render() {
               ...p, ...s, def_plus: playerDefPlus, def_runs_computed: playerFldRunsRd,
               _displayEvts: playerFldEvts, _statEvts: playerFldEvts,
               _paCount: playerPaCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
-              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'R+',
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
             });
           }
           defPlayerRows.sort((a, b) => (b.def_runs_computed ?? 0) - (a.def_runs_computed ?? 0));
@@ -1755,7 +1755,7 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitc
   if (runsLinePoints.length > 1) {
     legendItems.push({
       color: '#f97316',
-      label: options._runsLabel || (isPitcher ? 'RA+' : 'R+'),
+      label: options._runsLabel || 'Runs (scaled)',
       prefix: '┄ ',
     });
   }
@@ -1891,7 +1891,7 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
   }
   ctx.globalAlpha = 1;
 
-  // ── compute Net wRC+ and Net Runs+ lines from all components ──
+  // ── compute Net wRC+ and Net Runs (scaled) lines from all components ──
   const bsrEvts = viewMode === 'pa' ? bsrDisplay : (row._bsrStatEvts || []);
   const fldEvts = viewMode === 'pa' ? fldDisplay : (row._fldStatEvts || []);
   const batEvtsForLine = viewMode === 'pa' ? batDisplay : batStats;
@@ -1922,7 +1922,7 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     ctx.stroke(); ctx.globalAlpha = 1;
   }
 
-  // ── draw Net Runs+ line (dashed, teal) ──
+  // ── draw Net Runs (scaled) line (dashed, teal) ──
   const nrunsLine = netRunsPts.map(p => ({ ...p, y: yScaleWrc(p.wrcPlus) }));
   if (nrunsLine.length > 1) {
     ctx.setLineDash([4, 3]);
@@ -1938,7 +1938,7 @@ function drawTeamChart(ctx, canvas, row, w, h, paCount) {
     legendItems.push({ color: '#1e1b4b', label: 'Net wRC+', prefix: '— ' });
   }
   if (nrunsLine.length > 1) {
-    legendItems.push({ color: XWOBA_LINE_COLOR, label: 'Net Runs+', prefix: '┄ ' });
+    legendItems.push({ color: XWOBA_LINE_COLOR, label: 'Net Runs (scaled)', prefix: '┄ ' });
   }
   drawCanvasLegend(ctx, pad, legendItems);
 
@@ -2020,16 +2020,16 @@ document.addEventListener('mousemove', e => {
       tooltip.innerHTML = `<strong>Net wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     } else if (bestLine.type === 'net-runs') {
-      tooltip.innerHTML = `<strong>Net Runs+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+      tooltip.innerHTML = `<strong>Net Runs (scaled) ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     } else if (bestLine.type === 'off-r') {
-      tooltip.innerHTML = `<strong>Off R+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+      tooltip.innerHTML = `<strong>Off Runs (scaled) ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     } else if (bestLine.type === 'def-ra') {
-      tooltip.innerHTML = `<strong>Def RA+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+      tooltip.innerHTML = `<strong>Def Runs Allowed (scaled) ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     } else if (bestLine.type === 'runs') {
-      const rLabel = isPitcherRow ? 'RA+' : 'R+';
+      const rLabel = 'Runs (scaled)';
       tooltip.innerHTML = `<strong>${rLabel} ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     } else if (bestLine.type === 'bat-wrc') {
