@@ -108,10 +108,12 @@
   .section-row{cursor:pointer}
   .section-row:hover{background:#f0f0ff !important}
   .section-row td{background:#f4f5f7;border-bottom:1px solid #e5e7eb}
-  .section-row .col-name{padding-left:28px !important;font-weight:600;font-size:13px}
+  .section-row .col-name{padding-left:28px !important;font-weight:400;font-size:13px}
+  .section-row.parent-section .col-name{padding-left:24px !important}
+  .section-row.child-section .col-name{padding-left:48px !important}
   .section-row .col-rank{color:transparent}
   .player-subrow td{background:#fafbfc;border-bottom:1px solid #eef0f2}
-  .player-subrow .col-name{padding-left:46px !important;font-weight:400;font-size:13px}
+  .player-subrow .col-name{padding-left:66px !important;font-weight:400;font-size:13px}
   .player-subrow .col-rank{color:transparent}
 
   /* ── Tooltip ────────────────────────────────────────────────── */
@@ -992,8 +994,7 @@ function render() {
         const offPA = offBatEvts.length;
         const offRPlus = offPA > 0 ? Math.round(100 + (offActualR - curLC.lgRPA * offPA) / (curLC.lgRPA * offPA) * 100) : '–';
         const offTr = document.createElement('tr');
-        offTr.classList.add('section-row');
-        offTr.style.fontWeight = '600';
+        offTr.classList.add('section-row', 'parent-section');
         offTr.innerHTML = `
           <td class="col-rank"></td>
           <td class="col-name"><span class="expand-arrow${offExpanded ? ' open' : ''}">▶</span> Offense</td>
@@ -1024,7 +1025,7 @@ function render() {
         const hitKey = r.team + '-hitting';
         const hitExpanded = expandedSections.has(hitKey);
         const hitTr = document.createElement('tr');
-        hitTr.classList.add('section-row');
+        hitTr.classList.add('section-row', 'child-section');
         hitTr.innerHTML = `
           <td class="col-rank"></td>
           <td class="col-name" style="padding-left:28px"><span class="expand-arrow${hitExpanded ? ' open' : ''}">▶</span> Hitting</td>
@@ -1089,7 +1090,7 @@ function render() {
         const bsrExpanded = expandedSections.has(bsrKey);
         const bsrPlus = r.pa > 0 ? Math.round(100 + (r.bsr ?? 0) / (curLC.lgRPA * r.pa) * 100) : '–';
         const bsrTr = document.createElement('tr');
-        bsrTr.classList.add('section-row');
+        bsrTr.classList.add('section-row', 'child-section');
         bsrTr.innerHTML = `
           <td class="col-rank"></td>
           <td class="col-name" style="padding-left:28px"><span class="expand-arrow${bsrExpanded ? ' open' : ''}">▶</span> Baserunning</td>
@@ -1164,8 +1165,7 @@ function render() {
         const defPitPA = defPitEvts.length;
         const defRAPlus = defPitPA > 0 ? Math.round(200 - (100 + (defActualRA - curLC.lgRPA * defPitPA) / (curLC.lgRPA * defPitPA) * 100)) : '–';
         const defenseTr = document.createElement('tr');
-        defenseTr.classList.add('section-row');
-        defenseTr.style.fontWeight = '600';
+        defenseTr.classList.add('section-row', 'parent-section');
         defenseTr.innerHTML = `
           <td class="col-rank"></td>
           <td class="col-name"><span class="expand-arrow${defenseExpanded ? ' open' : ''}">▶</span> Defense</td>
@@ -1197,7 +1197,7 @@ function render() {
         const spExpanded = expandedSections.has(spKey);
         const spS = computeStats(r._spStatEvts || [], true);
         const spTr = document.createElement('tr');
-        spTr.classList.add('section-row');
+        spTr.classList.add('section-row', 'child-section');
         spTr.innerHTML = `
           <td class="col-rank"></td>
           <td class="col-name" style="padding-left:28px"><span class="expand-arrow${spExpanded ? ' open' : ''}">▶</span> Starting Pitching</td>
@@ -1265,7 +1265,7 @@ function render() {
         const rpExpanded = expandedSections.has(rpKey);
         const rpS = computeStats(r._rpStatEvts || [], true);
         const rpTr = document.createElement('tr');
-        rpTr.classList.add('section-row');
+        rpTr.classList.add('section-row', 'child-section');
         rpTr.innerHTML = `
           <td class="col-rank"></td>
           <td class="col-name" style="padding-left:28px"><span class="expand-arrow${rpExpanded ? ' open' : ''}">▶</span> Relief Pitching</td>
@@ -1337,7 +1337,7 @@ function render() {
         const fldPA = fldStatEvts.length;
         const defPlus = fldPA > 0 ? Math.round(computedDefRuns * 10) / 10 : '–';
         const defTr = document.createElement('tr');
-        defTr.classList.add('section-row');
+        defTr.classList.add('section-row', 'child-section');
         defTr.innerHTML = `
           <td class="col-rank"></td>
           <td class="col-name" style="padding-left:28px"><span class="expand-arrow${defExpanded ? ' open' : ''}">▶</span> Fielding</td>
