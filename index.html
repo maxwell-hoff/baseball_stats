@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Box Score Anatomy</title>
+<title>Run Anatomy</title>
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   body{
@@ -131,7 +131,7 @@
 <body>
 
 <div class="header">
-  <h1>Box Score Anatomy</h1>
+  <h1>Run Anatomy</h1>
   <div class="meta">
     <!-- <span id="season"></span> -->
     Where wins come from
@@ -288,7 +288,10 @@ function eventLegendItems(displayEvents) {
 /* ================================================================
    STATE
    ================================================================ */
-let DATA = null;
+let DATA = null;       // legacy monolithic data (used for player mode / team-traced)
+let SHELL = null;      // shell.json: metadata + team summary stats
+const TEAM_DATA = {};  // loaded team files: { abbr: parsed JSON }
+const TEAM_LOADING = {}; // in-flight promises: { abbr: Promise }
 let sort = { key: 'net_wrc_plus', dir: 'desc' };
 let compressedX = null; // compressed x-scale function (skips offseason)
 const canvasMap = new Map();
@@ -319,38 +322,258 @@ let curLC = { lgwOBA: 0.313, wOBAScale: 1.232, lgRPA: 0.118 };
 let PARK_FACTORS = null;
 
 /* ================================================================
+   CACHE (localStorage for shell, IndexedDB for team files)
+   ================================================================ */
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const CACHE_SHELL_KEY = 'bb_shell';
+const CACHE_TS_KEY = 'bb_cache_ts';
+const CACHE_UPDATED_KEY = 'bb_last_updated';
+const IDB_NAME = 'bbstats';
+const IDB_STORE = 'teamCache';
+const IDB_VERSION = 1;
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE))
+        db.createObjectStore(IDB_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbGet(key) {
+  try {
+    const db = await idbOpen();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const get = tx.objectStore(IDB_STORE).get(key);
+      get.onsuccess = () => resolve(get.result ?? null);
+      get.onerror = () => resolve(null);
+    });
+  } catch { return null; }
+}
+
+async function idbPut(key, value) {
+  try {
+    const db = await idbOpen();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch { /* ignore */ }
+}
+
+async function idbClear() {
+  try {
+    const db = await idbOpen();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch { /* ignore */ }
+}
+
+function cacheIsFresh() {
+  try {
+    const ts = localStorage.getItem(CACHE_TS_KEY);
+    if (!ts) return false;
+    return (Date.now() - parseInt(ts, 10)) < CACHE_TTL_MS;
+  } catch { return false; }
+}
+
+function getCachedShell() {
+  try {
+    const raw = localStorage.getItem(CACHE_SHELL_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function cacheShell(shell) {
+  try {
+    localStorage.setItem(CACHE_SHELL_KEY, JSON.stringify(shell));
+    localStorage.setItem(CACHE_TS_KEY, String(Date.now()));
+    localStorage.setItem(CACHE_UPDATED_KEY, shell.last_updated);
+  } catch { /* localStorage full or disabled */ }
+}
+
+function invalidateCache() {
+  try {
+    localStorage.removeItem(CACHE_SHELL_KEY);
+    localStorage.removeItem(CACHE_TS_KEY);
+    localStorage.removeItem(CACHE_UPDATED_KEY);
+  } catch { /* ignore */ }
+  idbClear();
+}
+
+/* ================================================================
+   TEAM DATA LOADING (with IndexedDB cache)
+   ================================================================ */
+function loadTeamData(abbr) {
+  if (TEAM_DATA[abbr]) return Promise.resolve(TEAM_DATA[abbr]);
+  if (TEAM_LOADING[abbr]) return TEAM_LOADING[abbr];
+
+  TEAM_LOADING[abbr] = (async () => {
+    if (cacheIsFresh()) {
+      const cached = await idbGet(abbr);
+      if (cached) {
+        TEAM_DATA[abbr] = cached;
+        delete TEAM_LOADING[abbr];
+        return cached;
+      }
+    }
+    const resp = await fetch(`data/teams/${abbr}.json`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    TEAM_DATA[abbr] = data;
+    delete TEAM_LOADING[abbr];
+    idbPut(abbr, data);
+    return data;
+  })();
+
+  return TEAM_LOADING[abbr];
+}
+
+function getTeamData(abbr) {
+  return TEAM_DATA[abbr] || null;
+}
+
+function buildTeamEventsFromPlayers(td) {
+  const evtSort = (a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3];
+  if (!td._battingEvents) {
+    const bat = [];
+    for (const p of td.batters || []) for (const e of p.events) bat.push(e);
+    bat.sort(evtSort);
+    td._battingEvents = bat;
+  }
+  if (!td._pitchingEvents) {
+    const pit = [];
+    for (const p of td.pitchers || []) for (const e of p.events) pit.push(e);
+    pit.sort(evtSort);
+    td._pitchingEvents = pit;
+  }
+  if (!td._spEvents) {
+    const sp = [], rp = [];
+    for (const p of td.pitchers || []) {
+      const target = p.isStarter ? sp : rp;
+      for (const e of p.events) target.push(e);
+    }
+    sp.sort(evtSort);
+    rp.sort(evtSort);
+    td._spEvents = sp;
+    td._rpEvents = rp;
+  }
+  return td;
+}
+
+function ensureAllPlayersLoaded() {
+  if (DATA && DATA.players) return Promise.resolve();
+  const abbrs = SHELL ? SHELL.teams.map(t => t.abbr) : [];
+  return Promise.all(abbrs.map(a => loadTeamData(a))).then(() => {
+    const players = [];
+    for (const a of abbrs) {
+      const td = TEAM_DATA[a];
+      if (!td) continue;
+      for (const p of td.batters || []) players.push(p);
+      for (const p of td.pitchers || []) players.push(p);
+    }
+    if (!DATA) DATA = {};
+    DATA.players = players;
+    DATA.years_available = SHELL.years_available;
+    DATA.league_constants = SHELL.league_constants;
+    DATA.last_updated = SHELL.last_updated;
+  });
+}
+
+/* ================================================================
    BOOT
    ================================================================ */
 document.addEventListener('DOMContentLoaded', async () => {
   try {
-    const resp = await fetch('data/player_data.json');
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    DATA = await resp.json();
+    // Try cache first
+    if (cacheIsFresh()) {
+      const cached = getCachedShell();
+      if (cached && Array.isArray(cached.teams)) SHELL = cached;
+    }
+
+    const shellWasCached = !!SHELL;
+    if (!SHELL) {
+      const resp = await fetch('data/shell.json');
+      if (!resp.ok) throw new Error(`Could not load data/shell.json (HTTP ${resp.status})`);
+      SHELL = await resp.json();
+
+      const prevUpdated = localStorage.getItem(CACHE_UPDATED_KEY);
+      if (prevUpdated && prevUpdated !== SHELL.last_updated) {
+        invalidateCache();
+      }
+      cacheShell(SHELL);
+    }
+
+    if (!SHELL.teams || !Array.isArray(SHELL.teams)) {
+      throw new Error('Invalid shell.json — missing teams array. Run python fetch_data.py');
+    }
+
+    if (!DATA) DATA = {};
+    DATA.years_available = SHELL.years_available;
+    DATA.league_constants = SHELL.league_constants;
+    DATA.last_updated = SHELL.last_updated;
+
+    try {
+      const pfResp = await fetch('data/park_factors.json');
+      if (pfResp.ok) PARK_FACTORS = await pfResp.json();
+    } catch (_) { /* park factors optional */ }
+
+    const years = SHELL.years_available;
+    const seasonEl = document.getElementById('season');
+    if (seasonEl) seasonEl.textContent = years.join(', ') + ' Season' + (years.length > 1 ? 's' : '');
+    document.getElementById('updated').textContent =
+      'Updated ' + new Date(SHELL.last_updated).toLocaleString();
+    const wtYearEl = document.getElementById('wt-year');
+    if (wtYearEl) wtYearEl.textContent = years[years.length - 1];
+
+    selectedYears = new Set([years[years.length - 1]]);
+    buildYearButtons(years);
+    syncLC();
+    bindControls();
+    render();
+
+    const teamAbbrs = SHELL.teams.map(t => t.abbr);
+    Promise.all(teamAbbrs.map(a => loadTeamData(a))).then(() => {
+      if (groupBy.startsWith('team')) render();
+    }).catch(err => console.error('Team data load failed:', err));
+
+    if (shellWasCached) {
+      fetch('data/shell.json').then(r => r.ok ? r.json() : null).then(fresh => {
+        if (fresh && fresh.last_updated !== SHELL.last_updated) {
+          invalidateCache();
+          SHELL = fresh;
+          cacheShell(fresh);
+          DATA.years_available = fresh.years_available;
+          DATA.league_constants = fresh.league_constants;
+          DATA.last_updated = fresh.last_updated;
+          Object.keys(TEAM_DATA).forEach(k => delete TEAM_DATA[k]);
+          syncLC();
+          render();
+          Promise.all(teamAbbrs.map(a => loadTeamData(a))).then(() => {
+            if (groupBy.startsWith('team')) render();
+          });
+        }
+      }).catch(() => {});
+    }
   } catch (e) {
+    console.error(e);
     document.getElementById('tbody').innerHTML =
       `<tr><td colspan="11" class="msg error">
-         Could not load data/player_data.json — run <code>python fetch_data.py</code> first.
+         ${e.message || e}<br>Run <code>python fetch_data.py</code> then refresh.
        </td></tr>`;
-    return;
   }
-
-  try {
-    const pfResp = await fetch('data/park_factors.json');
-    if (pfResp.ok) PARK_FACTORS = await pfResp.json();
-  } catch (_) { /* park factors optional */ }
-
-  const years = DATA.years_available;
-  document.getElementById('season').textContent = years.join(', ') + ' Season' + (years.length > 1 ? 's' : '');
-  document.getElementById('updated').textContent =
-    'Updated ' + new Date(DATA.last_updated).toLocaleString();
-  document.getElementById('wt-year').textContent = years[years.length - 1];
-
-  // Default: most recent year selected
-  selectedYears = new Set([years[years.length - 1]]);
-  buildYearButtons(years);
-  syncLC();
-  bindControls();
-  render();
 });
 
 function syncLC() {
@@ -423,6 +646,9 @@ function bindControls() {
       groupBy.startsWith('team') ? 'Search team…' : 'Search player…';
     expandedTeams.clear();
     expandedSections.clear();
+    if (groupBy === 'player' || groupBy === 'team-aswas') {
+      ensureAllPlayersLoaded().then(() => render());
+    }
     render();
   });
 
@@ -430,6 +656,9 @@ function bindControls() {
     playerTypeFilter = e.target.value;
     if (playerTypeFilter === 'pitcher' && sort.key === 'wrc_plus') sort.key = 'owrc_plus';
     else if (playerTypeFilter !== 'pitcher' && sort.key === 'owrc_plus') sort.key = 'wrc_plus';
+    if (!DATA || !DATA.players) {
+      ensureAllPlayersLoaded().then(() => render());
+    }
     render();
   });
 
@@ -480,7 +709,33 @@ function getEventsForEntity(entity, paCount) {
   return { display: entity.events, stats: entity.events.slice(-paCount) };
 }
 
+function buildTeamRowsFromPreloaded() {
+  const result = [];
+  for (const st of SHELL.teams) {
+    const td = getTeamData(st.abbr);
+    if (!td) continue;
+    buildTeamEventsFromPlayers(td);
+    result.push({
+      name: st.abbr, team: st.abbr, playerType: 'team',
+      battingEvents: td._battingEvents,
+      pitchingEvents: td._pitchingEvents,
+      spEvents: td._spEvents,
+      rpEvents: td._rpEvents,
+      baserunningEvents: td.baserunningEvents,
+      fieldingEvents: td.fieldingEvents,
+      events: td._battingEvents,
+      bsr: st.bsr, sb: st.sb, cs: st.cs, def_runs: st.def_runs,
+    });
+  }
+  return result;
+}
+
 function buildTeamRows(mode) {
+  if (mode === 'team-asis') {
+    const preloaded = buildTeamRowsFromPreloaded();
+    if (preloaded.length > 0) return preloaded;
+  }
+
   const batters = DATA.players.filter(p => (p.playerType || 'batter') === 'batter');
   const pitchers = DATA.players.filter(p => (p.playerType || 'batter') === 'pitcher');
   const teams = new Map();
@@ -550,8 +805,6 @@ function buildTeamRows(mode) {
 
   const evtSort = (a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3];
 
-  // Pre-pass: compute league-average (xwOBA - rv) per batted ball to remove
-  // the systematic bias between xwOBA scale and linear-weight scale
   let lgFldDeltaSum = 0, lgFldDeltaCount = 0;
   for (const t of teams.values()) {
     for (const e of t.pitchingEvents) {
@@ -593,6 +846,14 @@ function buildTeamRows(mode) {
 }
 
 function getPlayersForTeam(teamAbbr, type) {
+  if (groupBy === 'team-asis') {
+    const td = getTeamData(teamAbbr);
+    if (td) {
+      const list = type === 'pitcher' ? (td.pitchers || []) : (td.batters || []);
+      return list.filter(p => (p.playerType || 'batter') === type);
+    }
+  }
+  if (!DATA || !DATA.players) return [];
   const typedPlayers = DATA.players.filter(p => (p.playerType || 'batter') === type);
   if (groupBy === 'team-asis') {
     return typedPlayers.filter(p => p.team === teamAbbr);
@@ -766,6 +1027,14 @@ function buildCompressedScale(allTimestamps) {
 /* ================================================================
    RENDER
    ================================================================ */
+function getShellStatsKey() {
+  if (viewMode !== 'season') return 'all';
+  const yrs = [...selectedYears].sort();
+  if (SHELL && yrs.length === SHELL.years_available.length) return 'all';
+  if (yrs.length === 1) return String(yrs[0]);
+  return 'all';
+}
+
 function render() {
   const q = document.getElementById('search').value.trim().toLowerCase();
   const minPA = Math.max(1, parseInt(document.getElementById('minPA').value, 10) || 1);
@@ -779,12 +1048,94 @@ function render() {
   document.getElementById('search').placeholder = isTeam ? 'Search team…' :
     playerTypeFilter === 'pitcher' ? 'Search pitcher…' : 'Search player…';
 
-  const filteredPlayers = playerTypeFilter === 'all'
-    ? DATA.players
-    : DATA.players.filter(p => (p.playerType || 'batter') === playerTypeFilter);
-  const source = isTeam ? buildTeamRows(groupBy) : filteredPlayers;
+  const needsPlayers = !isTeam || groupBy !== 'team-asis';
+  if (needsPlayers && (!DATA || !DATA.players)) {
+    if (!isTeam) {
+      document.getElementById('tbody').innerHTML =
+        '<tr><td colspan="11" style="text-align:center;padding:20px;color:#6b7280">Loading player data…</td></tr>';
+      return;
+    }
+  }
+
+  let source;
+  if (isTeam) {
+    const anyTeamLoaded = SHELL && SHELL.teams.some(t => getTeamData(t.abbr));
+    source = (groupBy === 'team-asis' && anyTeamLoaded) ? buildTeamRows(groupBy)
+           : (DATA && DATA.players) ? buildTeamRows(groupBy) : null;
+  } else {
+    const filteredPlayers = playerTypeFilter === 'all'
+      ? DATA.players
+      : DATA.players.filter(p => (p.playerType || 'batter') === playerTypeFilter);
+    source = filteredPlayers;
+  }
 
   const currentYear = DATA.years_available[DATA.years_available.length - 1];
+
+  // Shell-only fast path: render table with pre-computed stats, no charts
+  if (isTeam && !source && SHELL) {
+    const statsKey = getShellStatsKey();
+    const shellRows = [];
+    for (const st of SHELL.teams) {
+      if (q && !st.abbr.toLowerCase().includes(q)) continue;
+      const s = st.stats_by_year[statsKey] || st.stats_by_year['all'] || {};
+      if ((s.pa || 0) < minPA) continue;
+      shellRows.push({
+        name: st.abbr, team: st.abbr,
+        pa: s.pa || 0,
+        wrc_plus: s.wrc_plus,
+        owrc_plus: s.owrc_plus,
+        bsr_plus: s.bsr_plus,
+        def_plus: s.def_plus,
+        net_wrc_plus: s.net_wrc_plus,
+        net_runs_plus: s.net_runs_plus,
+        isTeamRow: true, _shellOnly: true,
+      });
+    }
+    const dir = sort.dir === 'desc' ? -1 : 1;
+    if (sort.key === 'name') shellRows.sort((a, b) => dir * a.name.localeCompare(b.name));
+    else shellRows.sort((a, b) => {
+      const av = a[sort.key]; const bv = b[sort.key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1; if (bv == null) return -1;
+      return dir * (av - bv);
+    });
+    document.querySelectorAll('#thead-row th[data-key]').forEach(th => {
+      const active = th.dataset.key === sort.key;
+      th.classList.toggle('active', active);
+      th.querySelector('.arrow').textContent = active ? (sort.dir === 'desc' ? '▼' : '▲') : '';
+    });
+    document.getElementById('count').textContent = `${shellRows.length} teams`;
+    const tbody = document.getElementById('tbody');
+    tbody.innerHTML = '';
+    canvasMap.clear(); pointsMap.clear(); lineMap.clear(); xLineMap.clear();
+    const frag = document.createDocumentFragment();
+    shellRows.forEach((r, i) => {
+      const tr = document.createElement('tr');
+      tr.classList.add('team-row');
+      tr.innerHTML = `
+        <td class="col-rank">${i + 1}</td>
+        <td class="col-name" title="${r.name}"><span class="expand-arrow">▶</span> ${r.name}</td>
+        <td class="col-team"></td>
+        <td class="col-num">${r.net_wrc_plus ?? '–'}</td>
+        <td class="col-num">${r.net_runs_plus ?? '–'}</td>
+        <td class="col-num">${r.wrc_plus ?? '–'}</td>
+        <td class="col-num">${r.owrc_plus ?? '–'}</td>
+        <td class="col-num">${r.pa}</td>
+        <td class="col-num">${r.bsr_plus ?? '–'}</td>
+        <td class="col-num">${r.def_plus ?? '–'}</td>
+        <td class="col-chart"><div style="color:#9ca3af;font-size:12px;padding:8px">Loading…</div></td>`;
+      tr.addEventListener('click', () => {
+        if (expandedTeams.has(r.team)) expandedTeams.delete(r.team);
+        else expandedTeams.add(r.team);
+        loadTeamData(r.team).then(() => render());
+      });
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+    return;
+  }
+
+  if (!source) return;
 
   const rows = [];
   const allTimestamps = [];
