@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import sys
+import urllib.request
 from collections import defaultdict
 from datetime import date, datetime
 
@@ -551,7 +552,80 @@ def _compute_net_metric(bat_evts, pit_evts, bsr_evts, fld_evts, lc, park_factors
     return net_wrc_plus, net_runs_plus
 
 
-def build_team_aggregations(player_list, pitcher_list, league_constants, years, park_factors):
+def _win_pct(wins: int, losses: int) -> float | None:
+    games = wins + losses
+    return round(wins / games, 3) if games > 0 else None
+
+
+def fetch_team_records(years: list[int]) -> dict[str, dict[str, dict]]:
+    """Fetch regular-season W-L by team from the MLB Stats API.
+
+    Returns {year_str: {abbr: {wins, losses, win_pct}}, ..., "all": {...}}.
+    win_pct is wins / (wins + losses).
+    """
+    print(f"\n  Fetching team W-L records …")
+    by_year: dict[str, dict[str, dict]] = {}
+
+    for year in years:
+        year_str = str(year)
+        by_year[year_str] = {}
+
+        teams_url = (
+            f"https://statsapi.mlb.com/api/v1/teams?sportId=1&season={year}"
+        )
+        with urllib.request.urlopen(teams_url, timeout=30) as resp:
+            teams_data = json.loads(resp.read())
+        id_to_abbr = {
+            t["id"]: t["abbreviation"]
+            for t in teams_data.get("teams", [])
+            if t.get("abbreviation")
+        }
+
+        standings_url = (
+            "https://statsapi.mlb.com/api/v1/standings"
+            f"?leagueId=103,104&season={year}&standingsTypes=regularSeason"
+        )
+        with urllib.request.urlopen(standings_url, timeout=30) as resp:
+            data = json.loads(resp.read())
+
+        for division in data.get("records", []):
+            for tr in division.get("teamRecords", []):
+                tid = tr.get("team", {}).get("id")
+                abbr = id_to_abbr.get(tid)
+                if not abbr:
+                    continue
+                wins = int(tr["wins"])
+                losses = int(tr["losses"])
+                by_year[year_str][abbr] = {
+                    "wins": wins,
+                    "losses": losses,
+                    "win_pct": _win_pct(wins, losses),
+                }
+
+        print(f"    {year}: {len(by_year[year_str])} teams")
+
+    all_recs: dict[str, dict] = {}
+    for year_recs in by_year.values():
+        for abbr, rec in year_recs.items():
+            if abbr not in all_recs:
+                all_recs[abbr] = {"wins": 0, "losses": 0}
+            all_recs[abbr]["wins"] += rec["wins"]
+            all_recs[abbr]["losses"] += rec["losses"]
+    for abbr, rec in all_recs.items():
+        rec["win_pct"] = _win_pct(rec["wins"], rec["losses"])
+    by_year["all"] = all_recs
+
+    return by_year
+
+
+def build_team_aggregations(
+    player_list,
+    pitcher_list,
+    league_constants,
+    years,
+    park_factors,
+    team_records=None,
+):
     """Pre-aggregate player/pitcher data into per-team structures and compute
     summary stats. Returns (shell_teams, team_files) where shell_teams is a list
     of summary dicts and team_files is a dict mapping team abbr to full team data."""
@@ -702,7 +776,7 @@ def build_team_aggregations(player_list, pitcher_list, league_constants, years, 
                 bat_evts, pit_evts, bsr_evts, fld_evts, lc, pf_data
             )
 
-            stats_by_year[year_key] = {
+            stats = {
                 "wrc_plus": bat_stats["wrc_plus"],
                 "owrc_plus": pit_stats["wrc_plus"],
                 "pa": bat_stats["pa"],
@@ -714,6 +788,13 @@ def build_team_aggregations(player_list, pitcher_list, league_constants, years, 
                 "net_runs_plus": net_runs_plus,
                 "pitching_xwoba": round(pit_stats["xwoba"], 4),
             }
+            if team_records:
+                rec = team_records.get(year_key, {}).get(abbr)
+                if rec:
+                    stats["wins"] = rec["wins"]
+                    stats["losses"] = rec["losses"]
+                    stats["win_pct"] = rec["win_pct"]
+            stats_by_year[year_key] = stats
 
         shell_teams.append({
             "abbr": abbr,
@@ -854,8 +935,9 @@ def main():
         print(f"\n  Wrote {legacy_path} ({size_mb:.1f} MB)")
 
     # ── Build split output: shell.json + per-team files ──────────────
+    team_records = fetch_team_records(years)
     shell_teams, team_files = build_team_aggregations(
-        player_list, pitcher_list, league_constants, years, park_factors
+        player_list, pitcher_list, league_constants, years, park_factors, team_records
     )
 
     shell = {

@@ -192,6 +192,7 @@
         <th class="col-num" data-key="pa">PA <span class="arrow"></span></th>
         <th class="col-num" data-key="bsr_plus">BsR+ <span class="arrow"></span></th>
         <th class="col-num" data-key="def_plus">DRS <span class="arrow"></span></th>
+        <th class="col-num col-win-pct" data-key="win_pct">Win % <span class="arrow"></span></th>
         <th class="col-chart">Plate Appearance Run Values</th>
       </tr>
     </thead>
@@ -570,7 +571,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   } catch (e) {
     console.error(e);
     document.getElementById('tbody').innerHTML =
-      `<tr><td colspan="11" class="msg error">
+      `<tr><td colspan="12" class="msg error">
          ${e.message || e}<br>Run <code>python fetch_data.py</code> then refresh.
        </td></tr>`;
   }
@@ -1035,10 +1036,38 @@ function getShellStatsKey() {
   return 'all';
 }
 
+const WIN_PCT_TD = '<td class="col-num col-win-pct">–</td>';
+
+function formatWinPct(winPct) {
+  if (winPct == null) return '–';
+  const s = winPct.toFixed(3);
+  return s.startsWith('0.') ? s.slice(1) : s;
+}
+
+function getShellTeamWinPct(abbr) {
+  if (!SHELL) return null;
+  const st = SHELL.teams.find(t => t.abbr === abbr);
+  if (!st) return null;
+  const s = st.stats_by_year[getShellStatsKey()] || st.stats_by_year['all'] || {};
+  return s.win_pct ?? null;
+}
+
+function teamWinPctTd(winPct) {
+  if (winPct == null) return WIN_PCT_TD;
+  return `<td class="col-num col-win-pct">${formatWinPct(winPct)}</td>`;
+}
+
+function setWinPctColumnVisible(visible) {
+  document.querySelectorAll('.col-win-pct').forEach(el => {
+    el.style.display = visible ? '' : 'none';
+  });
+}
+
 function render() {
   const q = document.getElementById('search').value.trim().toLowerCase();
   const minPA = Math.max(1, parseInt(document.getElementById('minPA').value, 10) || 1);
   const isTeam = groupBy.startsWith('team');
+  setWinPctColumnVisible(isTeam);
   const paCount = isTeam ? PA_WINDOWS[paWindowKey].team : PA_WINDOWS[paWindowKey].player;
   const playerPaCount = PA_WINDOWS[paWindowKey].player;
 
@@ -1052,7 +1081,7 @@ function render() {
   if (needsPlayers && (!DATA || !DATA.players)) {
     if (!isTeam) {
       document.getElementById('tbody').innerHTML =
-        '<tr><td colspan="11" style="text-align:center;padding:20px;color:#6b7280">Loading player data…</td></tr>';
+        '<tr><td colspan="12" style="text-align:center;padding:20px;color:#6b7280">Loading player data…</td></tr>';
       return;
     }
   }
@@ -1088,6 +1117,7 @@ function render() {
         def_plus: s.def_plus,
         net_wrc_plus: s.net_wrc_plus,
         net_runs_plus: s.net_runs_plus,
+        win_pct: s.win_pct ?? null,
         isTeamRow: true, _shellOnly: true,
       });
     }
@@ -1123,6 +1153,7 @@ function render() {
         <td class="col-num">${r.pa}</td>
         <td class="col-num">${r.bsr_plus ?? '–'}</td>
         <td class="col-num">${r.def_plus ?? '–'}</td>
+        ${teamWinPctTd(r.win_pct)}
         <td class="col-chart"><div style="color:#9ca3af;font-size:12px;padding:8px">Loading…</div></td>`;
       tr.addEventListener('click', () => {
         if (expandedTeams.has(r.team)) expandedTeams.delete(r.team);
@@ -1184,6 +1215,7 @@ function render() {
         fld_runs: Math.round(fldRunsFromEvts * 10) / 10,
         net_runs_plus: lastNetMetric ? Math.round(lastNetMetric.netRunsPlus) : null,
         net_wrc_plus: lastNetMetric ? Math.round(lastNetMetric.wrcPlus) : null,
+        win_pct: getShellTeamWinPct(p.team),
         pitching_xwoba: pitS.xwoba,
         pitching_pa: pitS.pa,
         _battingDisplayEvts: batDisplay,
@@ -1320,6 +1352,7 @@ function render() {
         <td class="col-num">${r.pa}</td>
         <td class="col-num">${r.bsr_plus ?? '–'}</td>
         <td class="col-num">${r.def_plus ?? '–'}</td>
+        ${teamWinPctTd(r.win_pct)}
         <td class="col-chart"><canvas></canvas></td>`;
       tr.addEventListener('click', () => {
         if (expandedTeams.has(r.team)) expandedTeams.delete(r.team);
@@ -1357,6 +1390,7 @@ function render() {
           <td class="col-num">${offPA}</td>
           <td class="col-num">${r.bsr_plus ?? '–'}</td>
           <td class="col-num">–</td>
+          ${WIN_PCT_TD}
           <td class="col-chart"><canvas></canvas></td>`;
         offTr.addEventListener('click', e => {
           e.stopPropagation();
@@ -1388,6 +1422,7 @@ function render() {
           <td class="col-num">${r.pa}</td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
+          ${WIN_PCT_TD}
           <td class="col-chart"><canvas></canvas></td>`;
         hitTr.addEventListener('click', e => {
           e.stopPropagation();
@@ -1430,6 +1465,7 @@ function render() {
               <td class="col-num">${pr.pa}</td>
               <td class="col-num">–</td>
               <td class="col-num">–</td>
+              ${WIN_PCT_TD}
               <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
             canvasMap.set(subTr.querySelector('canvas'), pr);
@@ -1453,6 +1489,7 @@ function render() {
           <td class="col-num">${r.pa}</td>
           <td class="col-num">${bsrPlus}</td>
           <td class="col-num">–</td>
+          ${WIN_PCT_TD}
           <td class="col-chart"><canvas></canvas></td>`;
         bsrTr.addEventListener('click', e => {
           e.stopPropagation();
@@ -1500,6 +1537,7 @@ function render() {
               <td class="col-num">${pr.pa}</td>
               <td class="col-num">${pr.bsr_plus}</td>
               <td class="col-num">–</td>
+              ${WIN_PCT_TD}
               <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
             canvasMap.set(subTr.querySelector('canvas'), pr);
@@ -1528,6 +1566,7 @@ function render() {
           <td class="col-num">${r.pitching_pa ?? 0}</td>
           <td class="col-num">–</td>
           <td class="col-num">${r.def_plus ?? '–'}</td>
+          ${WIN_PCT_TD}
           <td class="col-chart"><canvas></canvas></td>`;
         defenseTr.addEventListener('click', e => {
           e.stopPropagation();
@@ -1560,6 +1599,7 @@ function render() {
           <td class="col-num">${spS.pa}</td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
+          ${WIN_PCT_TD}
           <td class="col-chart"><canvas></canvas></td>`;
         spTr.addEventListener('click', e => {
           e.stopPropagation();
@@ -1605,6 +1645,7 @@ function render() {
               <td class="col-num">${pr.pa}</td>
               <td class="col-num">–</td>
               <td class="col-num">–</td>
+              ${WIN_PCT_TD}
               <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
             canvasMap.set(subTr.querySelector('canvas'), pr);
@@ -1628,6 +1669,7 @@ function render() {
           <td class="col-num">${rpS.pa}</td>
           <td class="col-num">–</td>
           <td class="col-num">–</td>
+          ${WIN_PCT_TD}
           <td class="col-chart"><canvas></canvas></td>`;
         rpTr.addEventListener('click', e => {
           e.stopPropagation();
@@ -1673,6 +1715,7 @@ function render() {
               <td class="col-num">${pr.pa}</td>
               <td class="col-num">–</td>
               <td class="col-num">–</td>
+              ${WIN_PCT_TD}
               <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
             canvasMap.set(subTr.querySelector('canvas'), pr);
@@ -1700,6 +1743,7 @@ function render() {
           <td class="col-num">${fldPA}</td>
           <td class="col-num">–</td>
           <td class="col-num">${defPlus}</td>
+          ${WIN_PCT_TD}
           <td class="col-chart"><canvas></canvas></td>`;
         defTr.addEventListener('click', e => {
           e.stopPropagation();
@@ -1750,6 +1794,7 @@ function render() {
               <td class="col-num">${pr.pa}</td>
               <td class="col-num">–</td>
               <td class="col-num">${pr.def_plus}</td>
+              ${WIN_PCT_TD}
               <td class="col-chart"><canvas></canvas></td>`;
             frag.appendChild(subTr);
             canvasMap.set(subTr.querySelector('canvas'), pr);
@@ -1772,6 +1817,7 @@ function render() {
         <td class="col-num">${r.pa}</td>
         <td class="col-num">${r.bsr_plus ?? '–'}</td>
         <td class="col-num">${r.def_plus ?? '–'}</td>
+        ${WIN_PCT_TD}
         <td class="col-chart"><canvas></canvas></td>`;
       frag.appendChild(tr);
       canvasMap.set(tr.querySelector('canvas'), r);
