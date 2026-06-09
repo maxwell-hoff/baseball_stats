@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MLB At-Bat Dashboard</title>
+<title>Run Anatomy</title>
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   body{
@@ -24,6 +24,7 @@
   .search{
     padding:7px 12px;border:1px solid #d1d5db;border-radius:6px;
     font-size:14px;width:260px;outline:none;transition:border .15s;
+    margin-left:auto;
   }
   .search:focus{border-color:#6366f1}
   .min-pa-wrap{display:flex;align-items:center;gap:6px;font-size:13px;color:#4b5563}
@@ -31,7 +32,13 @@
     width:64px;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;
     font-size:13px;text-align:center;outline:none;
   }
-  .player-count{font-size:13px;color:#6b7280;margin-left:auto}
+  .player-count{font-size:13px;color:#6b7280}
+
+  /* ── Chart zoom bar ─────────────────────────────────────────── */
+  .chart-zoom-bar{
+    display:flex;justify-content:flex-end;
+    margin-bottom:6px;
+  }
 
   /* zoom controls */
   .zoom-wrap{display:flex;align-items:center;gap:4px;font-size:13px;color:#4b5563}
@@ -46,7 +53,7 @@
   .zoom-label{font-size:12px;min-width:28px;text-align:center;font-variant-numeric:tabular-nums}
 
   /* mode / year / PA selectors */
-  .mode-select,.pa-select{
+  .mode-select{
     padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;
     font-size:13px;background:#fff;outline:none;cursor:pointer;
   }
@@ -60,33 +67,34 @@
   .hidden{display:none !important}
 
   /* ── Legend ─────────────────────────────────────────────────── */
-  .legend{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:18px;font-size:12px;color:#4b5563}
-  .legend-item{display:flex;align-items:center;gap:4px}
-  .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+  .legend{display:none}
 
   /* ── Table ──────────────────────────────────────────────────── */
   .table-wrap{
     background:#fff;border-radius:10px;
-    box-shadow:0 1px 3px rgba(0,0,0,.08);overflow-x:auto;
+    box-shadow:0 1px 3px rgba(0,0,0,.08);
+    overflow:auto;
+    max-height:calc(100vh - 240px);
   }
   table{width:100%;border-collapse:collapse;min-width:960px}
   thead th{
-    position:sticky;top:0;z-index:2;
+    position:sticky;top:0;z-index:3;
     background:#f9fafb;padding:10px 14px;text-align:left;
     font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;
     color:#6b7280;border-bottom:2px solid #e5e7eb;cursor:pointer;user-select:none;
     white-space:nowrap;
+    box-shadow:0 1px 0 #e5e7eb;
   }
   thead th:hover{color:#1a1a2e}
   thead th .arrow{font-size:10px;margin-left:3px;opacity:.5}
   thead th.active .arrow{opacity:1;color:#6366f1}
   tbody td{padding:6px 14px;border-bottom:1px solid #f3f4f6;font-size:14px;vertical-align:middle}
   tbody tr:hover{background:#fafaff}
-  .col-rank{width:44px;color:#9ca3af;text-align:right;font-variant-numeric:tabular-nums}
-  .col-name{width:180px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .col-team{width:52px;font-size:12px;color:#6b7280;text-align:center}
-  .col-num{width:62px;text-align:right;font-variant-numeric:tabular-nums}
-  .col-chart{min-width:500px;padding:4px 10px !important}
+  .col-rank{width:28px;color:#9ca3af;text-align:right;font-variant-numeric:tabular-nums}
+  .col-name{width:130px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .col-team{width:36px;font-size:12px;color:#6b7280;text-align:center}
+  .col-num{width:48px;text-align:right;font-variant-numeric:tabular-nums;font-size:12px}
+  .col-chart{min-width:500px;padding:4px 10px !important;width:100%}
   .col-chart canvas{display:block;width:100%;height:90px}
 
   /* ── Team expand/collapse ────────────────────────────────────── */
@@ -97,8 +105,15 @@
     transition:transform .15s;text-align:center;color:#9ca3af;
   }
   .expand-arrow.open{transform:rotate(90deg)}
+  .section-row{cursor:pointer}
+  .section-row:hover{background:#f0f0ff !important}
+  .section-row td{background:#f4f5f7;border-bottom:1px solid #e5e7eb}
+  .section-row .col-name{padding-left:28px !important;font-weight:400;font-size:13px}
+  .section-row.parent-section .col-name{padding-left:24px !important}
+  .section-row.child-section .col-name{padding-left:48px !important}
+  .section-row .col-rank{color:transparent}
   .player-subrow td{background:#fafbfc;border-bottom:1px solid #eef0f2}
-  .player-subrow .col-name{padding-left:32px !important;font-weight:400;font-size:13px}
+  .player-subrow .col-name{padding-left:66px !important;font-weight:400;font-size:13px}
   .player-subrow .col-rank{color:transparent}
 
   /* ── Tooltip ────────────────────────────────────────────────── */
@@ -116,53 +131,52 @@
 <body>
 
 <div class="header">
-  <h1>MLB Plate Appearance Dashboard</h1>
+  <h1>Run Anatomy</h1>
   <div class="meta">
-    <span id="season"></span>
-    &nbsp;·&nbsp; <span id="updated"></span>
-    &nbsp;·&nbsp; Run values = wOBA linear weights (<span id="wt-year"></span>)
+    <!-- <span id="season"></span> -->
+    Where wins come from
+    &nbsp;&nbsp; <span id="updated"></span>
   </div>
 </div>
 
 <div class="controls">
-  <input class="search" id="search" type="text" placeholder="Search player…">
+  <select class="mode-select" id="groupBy">
+    <option value="player">By Player</option>
+    <option value="team-asis" selected>By Team – As-is</option>
+    <option value="team-aswas">By Team – As-was</option>
+  </select>
 
   <select class="mode-select" id="mode">
     <option value="season">By Season</option>
-    <option value="pa">By PAs</option>
+    <option value="rolling-season">Rolling Average – Season (~6,000 PA/team, ~600 PA/player)</option>
+    <option value="rolling-month">Rolling Average – Month (~1,000 PA/team, ~60 PA/player)</option>
+  </select>
+
+  <select class="mode-select" id="playerType">
+    <option value="batter" selected>Batters</option>
+    <option value="pitcher">Pitchers</option>
+    <option value="all">All Players</option>
   </select>
 
   <div class="year-btns" id="yearBtns"></div>
 
-  <select class="pa-select hidden" id="paWindow">
-    <option value="season">Season (~6,000/team, ~600/player)</option>
-    <option value="month">Month (~1,000/team, ~60/player)</option>
-  </select>
-
-  <select class="mode-select" id="groupBy">
-    <option value="player">By Player</option>
-    <option value="team-asis">By Team – As-is</option>
-    <option value="team-aswas">By Team – As-was</option>
-  </select>
-
   <div class="min-pa-wrap">
     Min PA: <input class="min-pa" id="minPA" type="number" value="60" min="1" step="1">
   </div>
-  <select class="mode-select" id="chartType">
-    <option value="scatter">Scatter</option>
-    <option value="bar" selected>Stacked Bar</option>
-  </select>
+  <div class="player-count" id="count"></div>
+  <input class="search" id="search" type="text" placeholder="Search team…">
+</div>
 
+<div class="legend" id="legend"></div>
+
+<div class="chart-zoom-bar">
   <div class="zoom-wrap">
     Chart:
     <button class="zoom-btn" id="zoomOut">−</button>
     <span class="zoom-label" id="zoomLabel">1x</span>
     <button class="zoom-btn" id="zoomIn">+</button>
   </div>
-  <div class="player-count" id="count"></div>
 </div>
-
-<div class="legend" id="legend"></div>
 
 <div class="table-wrap">
   <table>
@@ -171,12 +185,14 @@
         <th class="col-rank">#</th>
         <th class="col-name" data-key="name">Player <span class="arrow"></span></th>
         <th class="col-team">Team</th>
+        <th class="col-num" data-key="net_wrc_plus">Net wRC+ <span class="arrow"></span></th>
+        <th class="col-num" data-key="net_runs_plus">Net Runs (scaled) <span class="arrow"></span></th>
         <th class="col-num" data-key="wrc_plus">wRC+ <span class="arrow"></span></th>
-        <th class="col-num" data-key="xwoba">xwOBA <span class="arrow"></span></th>
+        <th class="col-num" data-key="owrc_plus">oWRC+ <span class="arrow"></span></th>
         <th class="col-num" data-key="pa">PA <span class="arrow"></span></th>
-        <th class="col-num" data-key="hits">Hits <span class="arrow"></span></th>
-        <th class="col-num" data-key="walks">BB <span class="arrow"></span></th>
-        <th class="col-num" data-key="bsr">BsR <span class="arrow"></span></th>
+        <th class="col-num" data-key="bsr_plus">BsR+ <span class="arrow"></span></th>
+        <th class="col-num" data-key="def_plus">DRS <span class="arrow"></span></th>
+        <th class="col-num col-win-pct" data-key="win_pct">Win % <span class="arrow"></span></th>
         <th class="col-chart">Plate Appearance Run Values</th>
       </tr>
     </thead>
@@ -198,6 +214,8 @@ const EVENT_COLORS = {
   walk:         '#3b82f6',
   intent_walk:  '#3b82f6',
   hit_by_pitch: '#a855f7',
+  stolen_base:  '#10b981',
+  caught_stealing: '#dc2626',
 };
 const OUT_COLOR = '#1c1c1f';
 const Y_MAX_DEFAULT = 2.037;
@@ -205,7 +223,11 @@ let yMax = Y_MAX_DEFAULT;
 const WRC_PLUS_MIN = 0;
 const WRC_PLUS_MAX = 250;
 const WRC_LINE_COLOR = '#6366f1';
+const OWRC_LINE_COLOR = '#e11d48';
 const XWOBA_LINE_COLOR = '#14b8a6';
+const BSR_BAR_COLOR = '#10b981';
+const DEF_BAR_COLOR = '#06b6d4';
+const RP_BAR_COLOR = '#f97316';
 const WRC_LINE_MIN_PA = 10;
 
 const HIT_EVENTS = new Set(['single','double','triple','home_run']);
@@ -213,24 +235,65 @@ const WALK_EVENTS = new Set(['walk','intent_walk']);
 const WOBA_DENOM_EXCLUDE = new Set([
   'intent_walk','sac_bunt','sac_bunt_double_play','catcher_interf',
 ]);
+const round3 = v => Math.round(v * 1000) / 1000;
+const NOT_BATTED_BALL = new Set([
+  'strikeout','strikeout_double_play','walk','intent_walk',
+  'hit_by_pitch','home_run','catcher_interf',
+]);
+const EVT_TO_PF_KEY = {
+  'single': '1B', 'double': '2B', 'triple': '3B', 'home_run': 'HR',
+  'walk': 'BB', 'intent_walk': 'BB',
+  'strikeout': 'SO', 'strikeout_double_play': 'SO',
+};
 
-const LEGEND_ITEMS = [
-  ['HR',  EVENT_COLORS.home_run],
-  ['3B',  EVENT_COLORS.triple],
-  ['2B',  EVENT_COLORS.double],
-  ['1B',  EVENT_COLORS.single],
-  ['BB',  EVENT_COLORS.walk],
-  ['HBP', EVENT_COLORS.hit_by_pitch],
-  ['Out', OUT_COLOR],
-  ['wRC+', WRC_LINE_COLOR],
-  ['xwOBA', XWOBA_LINE_COLOR],
+const EVENT_LEGEND_ORDER = [
+  ['home_run', 'HR'], ['triple', '3B'], ['double', '2B'], ['single', '1B'],
+  ['walk', 'BB'], ['intent_walk', 'BB'], ['hit_by_pitch', 'HBP'],
+  ['stolen_base', 'SB'], ['caught_stealing', 'CS'], ['fielding', 'Fielding'],
 ];
+
+function drawCanvasLegend(ctx, pad, items) {
+  if (!items.length) return;
+  ctx.font = '8px sans-serif';
+  ctx.globalAlpha = 0.65;
+  ctx.textAlign = 'left';
+  let cx = pad.left + 2;
+  const cy = pad.top + 8;
+  for (const { color, label, prefix } of items) {
+    ctx.fillStyle = color;
+    const text = (prefix || '■ ') + label;
+    ctx.fillText(text, cx, cy);
+    cx += ctx.measureText(text).width + 6;
+  }
+  ctx.globalAlpha = 1;
+}
+
+function eventLegendItems(displayEvents) {
+  const present = new Set(displayEvents.map(e => e[1]));
+  const items = [];
+  const added = new Set();
+  for (const [evt, label] of EVENT_LEGEND_ORDER) {
+    if (!present.has(evt) || added.has(label)) continue;
+    added.add(label);
+    const color = evt === 'fielding' ? DEF_BAR_COLOR : (EVENT_COLORS[evt] || OUT_COLOR);
+    items.push({ color, label });
+  }
+  const hasOut = [...present].some(evt =>
+    evt !== 'fielding' && !EVENT_COLORS[evt] && evt !== 'stolen_base' && evt !== 'caught_stealing');
+  if (hasOut && !added.has('Out')) {
+    items.push({ color: OUT_COLOR, label: 'Out' });
+  }
+  return items;
+}
 
 /* ================================================================
    STATE
    ================================================================ */
-let DATA = null;
-let sort = { key: 'wrc_plus', dir: 'desc' };
+let DATA = null;       // legacy monolithic data (used for player mode / team-traced)
+let SHELL = null;      // shell.json: metadata + team summary stats
+const TEAM_DATA = {};  // loaded team files: { abbr: parsed JSON }
+const TEAM_LOADING = {}; // in-flight promises: { abbr: Promise }
+let sort = { key: 'net_wrc_plus', dir: 'desc' };
 let compressedX = null; // compressed x-scale function (skips offseason)
 const canvasMap = new Map();
 const pointsMap = new Map();
@@ -242,9 +305,11 @@ let selectedYears = new Set();   // for season mode
 let paWindowKey = 'season';      // 'season' | 'month'
 let chartZoom = 1;               // 1x, 2x, 4x, 8x
 const ZOOM_STEPS = [1, 2, 4, 8];
-let groupBy = 'player';          // 'player' | 'team-asis' | 'team-aswas'
+let groupBy = 'team-asis';       // 'player' | 'team-asis' | 'team-aswas'
 let chartType = 'bar';           // 'scatter' | 'bar'
+let playerTypeFilter = 'batter'; // 'batter' | 'pitcher' | 'all'
 const expandedTeams = new Set();
+const expandedSections = new Set();
 
 const PA_WINDOWS = {
   season: { team: 6000, player: 600 },
@@ -258,39 +323,258 @@ let curLC = { lgwOBA: 0.313, wOBAScale: 1.232, lgRPA: 0.118 };
 let PARK_FACTORS = null;
 
 /* ================================================================
+   CACHE (localStorage for shell, IndexedDB for team files)
+   ================================================================ */
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const CACHE_SHELL_KEY = 'bb_shell';
+const CACHE_TS_KEY = 'bb_cache_ts';
+const CACHE_UPDATED_KEY = 'bb_last_updated';
+const IDB_NAME = 'bbstats';
+const IDB_STORE = 'teamCache';
+const IDB_VERSION = 1;
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE))
+        db.createObjectStore(IDB_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbGet(key) {
+  try {
+    const db = await idbOpen();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const get = tx.objectStore(IDB_STORE).get(key);
+      get.onsuccess = () => resolve(get.result ?? null);
+      get.onerror = () => resolve(null);
+    });
+  } catch { return null; }
+}
+
+async function idbPut(key, value) {
+  try {
+    const db = await idbOpen();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch { /* ignore */ }
+}
+
+async function idbClear() {
+  try {
+    const db = await idbOpen();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch { /* ignore */ }
+}
+
+function cacheIsFresh() {
+  try {
+    const ts = localStorage.getItem(CACHE_TS_KEY);
+    if (!ts) return false;
+    return (Date.now() - parseInt(ts, 10)) < CACHE_TTL_MS;
+  } catch { return false; }
+}
+
+function getCachedShell() {
+  try {
+    const raw = localStorage.getItem(CACHE_SHELL_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function cacheShell(shell) {
+  try {
+    localStorage.setItem(CACHE_SHELL_KEY, JSON.stringify(shell));
+    localStorage.setItem(CACHE_TS_KEY, String(Date.now()));
+    localStorage.setItem(CACHE_UPDATED_KEY, shell.last_updated);
+  } catch { /* localStorage full or disabled */ }
+}
+
+function invalidateCache() {
+  try {
+    localStorage.removeItem(CACHE_SHELL_KEY);
+    localStorage.removeItem(CACHE_TS_KEY);
+    localStorage.removeItem(CACHE_UPDATED_KEY);
+  } catch { /* ignore */ }
+  idbClear();
+}
+
+/* ================================================================
+   TEAM DATA LOADING (with IndexedDB cache)
+   ================================================================ */
+function loadTeamData(abbr) {
+  if (TEAM_DATA[abbr]) return Promise.resolve(TEAM_DATA[abbr]);
+  if (TEAM_LOADING[abbr]) return TEAM_LOADING[abbr];
+
+  TEAM_LOADING[abbr] = (async () => {
+    if (cacheIsFresh()) {
+      const cached = await idbGet(abbr);
+      if (cached) {
+        TEAM_DATA[abbr] = cached;
+        delete TEAM_LOADING[abbr];
+        return cached;
+      }
+    }
+    const resp = await fetch(`data/teams/${abbr}.json`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    TEAM_DATA[abbr] = data;
+    delete TEAM_LOADING[abbr];
+    idbPut(abbr, data);
+    return data;
+  })();
+
+  return TEAM_LOADING[abbr];
+}
+
+function getTeamData(abbr) {
+  return TEAM_DATA[abbr] || null;
+}
+
+function buildTeamEventsFromPlayers(td) {
+  const evtSort = (a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3];
+  if (!td._battingEvents) {
+    const bat = [];
+    for (const p of td.batters || []) for (const e of p.events) bat.push(e);
+    bat.sort(evtSort);
+    td._battingEvents = bat;
+  }
+  if (!td._pitchingEvents) {
+    const pit = [];
+    for (const p of td.pitchers || []) for (const e of p.events) pit.push(e);
+    pit.sort(evtSort);
+    td._pitchingEvents = pit;
+  }
+  if (!td._spEvents) {
+    const sp = [], rp = [];
+    for (const p of td.pitchers || []) {
+      const target = p.isStarter ? sp : rp;
+      for (const e of p.events) target.push(e);
+    }
+    sp.sort(evtSort);
+    rp.sort(evtSort);
+    td._spEvents = sp;
+    td._rpEvents = rp;
+  }
+  return td;
+}
+
+function ensureAllPlayersLoaded() {
+  if (DATA && DATA.players) return Promise.resolve();
+  const abbrs = SHELL ? SHELL.teams.map(t => t.abbr) : [];
+  return Promise.all(abbrs.map(a => loadTeamData(a))).then(() => {
+    const players = [];
+    for (const a of abbrs) {
+      const td = TEAM_DATA[a];
+      if (!td) continue;
+      for (const p of td.batters || []) players.push(p);
+      for (const p of td.pitchers || []) players.push(p);
+    }
+    if (!DATA) DATA = {};
+    DATA.players = players;
+    DATA.years_available = SHELL.years_available;
+    DATA.league_constants = SHELL.league_constants;
+    DATA.last_updated = SHELL.last_updated;
+  });
+}
+
+/* ================================================================
    BOOT
    ================================================================ */
 document.addEventListener('DOMContentLoaded', async () => {
-  buildLegend();
   try {
-    const resp = await fetch('data/player_data.json');
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    DATA = await resp.json();
+    // Try cache first
+    if (cacheIsFresh()) {
+      const cached = getCachedShell();
+      if (cached && Array.isArray(cached.teams)) SHELL = cached;
+    }
+
+    const shellWasCached = !!SHELL;
+    if (!SHELL) {
+      const resp = await fetch('data/shell.json');
+      if (!resp.ok) throw new Error(`Could not load data/shell.json (HTTP ${resp.status})`);
+      SHELL = await resp.json();
+
+      const prevUpdated = localStorage.getItem(CACHE_UPDATED_KEY);
+      if (prevUpdated && prevUpdated !== SHELL.last_updated) {
+        invalidateCache();
+      }
+      cacheShell(SHELL);
+    }
+
+    if (!SHELL.teams || !Array.isArray(SHELL.teams)) {
+      throw new Error('Invalid shell.json — missing teams array. Run python fetch_data.py');
+    }
+
+    if (!DATA) DATA = {};
+    DATA.years_available = SHELL.years_available;
+    DATA.league_constants = SHELL.league_constants;
+    DATA.last_updated = SHELL.last_updated;
+
+    try {
+      const pfResp = await fetch('data/park_factors.json');
+      if (pfResp.ok) PARK_FACTORS = await pfResp.json();
+    } catch (_) { /* park factors optional */ }
+
+    const years = SHELL.years_available;
+    const seasonEl = document.getElementById('season');
+    if (seasonEl) seasonEl.textContent = years.join(', ') + ' Season' + (years.length > 1 ? 's' : '');
+    document.getElementById('updated').textContent =
+      'Updated ' + new Date(SHELL.last_updated).toLocaleString();
+    const wtYearEl = document.getElementById('wt-year');
+    if (wtYearEl) wtYearEl.textContent = years[years.length - 1];
+
+    selectedYears = new Set([years[years.length - 1]]);
+    buildYearButtons(years);
+    syncLC();
+    bindControls();
+    render();
+
+    const teamAbbrs = SHELL.teams.map(t => t.abbr);
+    Promise.all(teamAbbrs.map(a => loadTeamData(a))).then(() => {
+      if (groupBy.startsWith('team')) render();
+    }).catch(err => console.error('Team data load failed:', err));
+
+    if (shellWasCached) {
+      fetch('data/shell.json').then(r => r.ok ? r.json() : null).then(fresh => {
+        if (fresh && fresh.last_updated !== SHELL.last_updated) {
+          invalidateCache();
+          SHELL = fresh;
+          cacheShell(fresh);
+          DATA.years_available = fresh.years_available;
+          DATA.league_constants = fresh.league_constants;
+          DATA.last_updated = fresh.last_updated;
+          Object.keys(TEAM_DATA).forEach(k => delete TEAM_DATA[k]);
+          syncLC();
+          render();
+          Promise.all(teamAbbrs.map(a => loadTeamData(a))).then(() => {
+            if (groupBy.startsWith('team')) render();
+          });
+        }
+      }).catch(() => {});
+    }
   } catch (e) {
+    console.error(e);
     document.getElementById('tbody').innerHTML =
-      `<tr><td colspan="10" class="msg error">
-         Could not load data/player_data.json — run <code>python fetch_data.py</code> first.
+      `<tr><td colspan="12" class="msg error">
+         ${e.message || e}<br>Run <code>python fetch_data.py</code> then refresh.
        </td></tr>`;
-    return;
   }
-
-  try {
-    const pfResp = await fetch('data/park_factors.json');
-    if (pfResp.ok) PARK_FACTORS = await pfResp.json();
-  } catch (_) { /* park factors optional */ }
-
-  const years = DATA.years_available;
-  document.getElementById('season').textContent = years.join(', ') + ' Season' + (years.length > 1 ? 's' : '');
-  document.getElementById('updated').textContent =
-    'Updated ' + new Date(DATA.last_updated).toLocaleString();
-  document.getElementById('wt-year').textContent = years[years.length - 1];
-
-  // Default: most recent year selected
-  selectedYears = new Set([years[years.length - 1]]);
-  buildYearButtons(years);
-  syncLC();
-  bindControls();
-  render();
 });
 
 function syncLC() {
@@ -308,15 +592,20 @@ function syncLC() {
   }
 }
 
-function getParkFactor(stadium, hand) {
+function getParkFactor(stadium, hand, evt) {
   if (!PARK_FACTORS || !stadium) return 1.0;
-  if (hand && PARK_FACTORS[hand] && PARK_FACTORS[hand][stadium] != null) {
-    return PARK_FACTORS[hand][stadium] / 100;
-  }
-  if (PARK_FACTORS.All && PARK_FACTORS.All[stadium] != null) {
-    return PARK_FACTORS.All[stadium] / 100;
-  }
-  return 1.0;
+  const evtKey = evt ? EVT_TO_PF_KEY[evt] : undefined;
+  const lookup = (bucket) => {
+    if (!bucket || !bucket[stadium]) return null;
+    const tf = bucket[stadium];
+    if (typeof tf === 'number') return tf / 100;
+    if (evtKey && tf[evtKey] != null) return tf[evtKey] / 100;
+    if (tf.wOBA != null) return tf.wOBA / 100;
+    return null;
+  };
+  if (hand) { const v = lookup(PARK_FACTORS[hand]); if (v != null) return v; }
+  const v = lookup(PARK_FACTORS.All);
+  return v != null ? v : 1.0;
 }
 
 /* ================================================================
@@ -346,19 +635,6 @@ function buildYearButtons(years) {
 }
 
 /* ================================================================
-   LEGEND
-   ================================================================ */
-function buildLegend() {
-  const el = document.getElementById('legend');
-  el.innerHTML = LEGEND_ITEMS.map(([label, color]) => {
-    if (label === 'wRC+') {
-      return `<div class="legend-item"><span style="width:16px;height:2px;background:${color};border-radius:1px"></span>${label}</div>`;
-    }
-    return `<div class="legend-item"><span class="dot" style="background:${color}"></span>${label}</div>`;
-  }).join('');
-}
-
-/* ================================================================
    CONTROLS
    ================================================================ */
 function bindControls() {
@@ -370,25 +646,34 @@ function bindControls() {
     document.getElementById('search').placeholder =
       groupBy.startsWith('team') ? 'Search team…' : 'Search player…';
     expandedTeams.clear();
+    expandedSections.clear();
+    if (groupBy === 'player' || groupBy === 'team-aswas') {
+      ensureAllPlayersLoaded().then(() => render());
+    }
+    render();
+  });
+
+  document.getElementById('playerType').addEventListener('change', e => {
+    playerTypeFilter = e.target.value;
+    if (playerTypeFilter === 'pitcher' && sort.key === 'wrc_plus') sort.key = 'owrc_plus';
+    else if (playerTypeFilter !== 'pitcher' && sort.key === 'owrc_plus') sort.key = 'wrc_plus';
+    if (!DATA || !DATA.players) {
+      ensureAllPlayersLoaded().then(() => render());
+    }
     render();
   });
 
   document.getElementById('mode').addEventListener('change', e => {
-    viewMode = e.target.value;
+    const val = e.target.value;
+    if (val === 'season') {
+      viewMode = 'season';
+    } else {
+      viewMode = 'pa';
+      paWindowKey = val === 'rolling-season' ? 'season' : 'month';
+    }
     document.getElementById('yearBtns').classList.toggle('hidden', viewMode !== 'season');
-    document.getElementById('paWindow').classList.toggle('hidden', viewMode !== 'pa');
     syncLC();
     render();
-  });
-
-  document.getElementById('paWindow').addEventListener('change', e => {
-    paWindowKey = e.target.value;
-    render();
-  });
-
-  document.getElementById('chartType').addEventListener('change', e => {
-    chartType = e.target.value;
-    drawAllCharts();
   });
 
   document.getElementById('zoomIn').addEventListener('click', () => {
@@ -425,28 +710,74 @@ function getEventsForEntity(entity, paCount) {
   return { display: entity.events, stats: entity.events.slice(-paCount) };
 }
 
+function buildTeamRowsFromPreloaded() {
+  const result = [];
+  for (const st of SHELL.teams) {
+    const td = getTeamData(st.abbr);
+    if (!td) continue;
+    buildTeamEventsFromPlayers(td);
+    result.push({
+      name: st.abbr, team: st.abbr, playerType: 'team',
+      battingEvents: td._battingEvents,
+      pitchingEvents: td._pitchingEvents,
+      spEvents: td._spEvents,
+      rpEvents: td._rpEvents,
+      baserunningEvents: td.baserunningEvents,
+      fieldingEvents: td.fieldingEvents,
+      events: td._battingEvents,
+      bsr: st.bsr, sb: st.sb, cs: st.cs, def_runs: st.def_runs,
+    });
+  }
+  return result;
+}
+
 function buildTeamRows(mode) {
+  if (mode === 'team-asis') {
+    const preloaded = buildTeamRowsFromPreloaded();
+    if (preloaded.length > 0) return preloaded;
+  }
+
+  const batters = DATA.players.filter(p => (p.playerType || 'batter') === 'batter');
+  const pitchers = DATA.players.filter(p => (p.playerType || 'batter') === 'pitcher');
   const teams = new Map();
 
+  function ensureTeam(abbr) {
+    if (!teams.has(abbr)) teams.set(abbr, {
+      name: abbr, team: abbr,
+      battingEvents: [], pitchingEvents: [], spEvents: [], rpEvents: [],
+      baserunningEvents: [], events: [],
+      bsr: 0, sb: 0, cs: 0, def_runs: 0, playerType: 'team',
+    });
+    return teams.get(abbr);
+  }
+
   if (mode === 'team-asis') {
-    for (const p of DATA.players) {
+    for (const p of batters) {
       const abbr = p.team;
       if (!abbr) continue;
-      if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [], bsr: 0, sb: 0, cs: 0 });
-      const t = teams.get(abbr);
-      for (const e of p.events) t.events.push(e);
-      t.bsr += (p.bsr ?? 0);
-      t.sb += (p.sb ?? 0);
-      t.cs += (p.cs ?? 0);
+      const t = ensureTeam(abbr);
+      for (const e of p.events) t.battingEvents.push(e);
+      for (const e of (p.baserunning_events ?? [])) t.baserunningEvents.push(e);
+      t.bsr += (p.bsr ?? 0); t.sb += (p.sb ?? 0); t.cs += (p.cs ?? 0);
+      t.def_runs += (p.def_runs ?? 0);
+    }
+    for (const p of pitchers) {
+      const abbr = p.team;
+      if (!abbr) continue;
+      const t = ensureTeam(abbr);
+      const isStarter = p.events.some(e => e[3] === 1);
+      for (const e of p.events) {
+        t.pitchingEvents.push(e);
+        if (isStarter) t.spEvents.push(e); else t.rpEvents.push(e);
+      }
     }
   } else {
     const playerTeamBsr = new Map();
-    for (const p of DATA.players) {
+    for (const p of batters) {
       for (const e of p.events) {
         const abbr = e[4];
         if (!abbr) continue;
-        if (!teams.has(abbr)) teams.set(abbr, { name: abbr, team: abbr, events: [], bsr: 0, sb: 0, cs: 0 });
-        teams.get(abbr).events.push(e);
+        ensureTeam(abbr).battingEvents.push(e);
       }
       const key = `${p.name}_${p.team}`;
       if (!playerTeamBsr.has(key)) {
@@ -456,25 +787,80 @@ function buildTeamRows(mode) {
           teams.get(abbr).bsr += (p.bsr ?? 0);
           teams.get(abbr).sb += (p.sb ?? 0);
           teams.get(abbr).cs += (p.cs ?? 0);
+          teams.get(abbr).def_runs += (p.def_runs ?? 0);
+          for (const e of (p.baserunning_events ?? [])) teams.get(abbr).baserunningEvents.push(e);
         }
+      }
+    }
+    for (const p of pitchers) {
+      const isStarter = p.events.some(e => e[3] === 1);
+      for (const e of p.events) {
+        const abbr = e[4];
+        if (!abbr) continue;
+        const t = ensureTeam(abbr);
+        t.pitchingEvents.push(e);
+        if (isStarter) t.spEvents.push(e); else t.rpEvents.push(e);
       }
     }
   }
 
+  const evtSort = (a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3];
+
+  let lgFldDeltaSum = 0, lgFldDeltaCount = 0;
   for (const t of teams.values()) {
-    t.events.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
+    for (const e of t.pitchingEvents) {
+      if (NOT_BATTED_BALL.has(e[1]) || e[5] == null) continue;
+      lgFldDeltaSum += (e[5] - e[2]);
+      lgFldDeltaCount++;
+    }
+  }
+  const lgFldBias = lgFldDeltaCount > 0 ? lgFldDeltaSum / lgFldDeltaCount : 0;
+
+  for (const t of teams.values()) {
+    t.battingEvents.sort(evtSort);
+    t.pitchingEvents.sort(evtSort);
+    t.spEvents.sort(evtSort);
+    t.rpEvents.sort(evtSort);
+    t.baserunningEvents = t.baserunningEvents.map(e =>
+      [e[0], e[1], round3(curLC.lgwOBA + e[2]), e[3], e[4], e[5], e[6], e[7]]);
+    t.baserunningEvents.sort(evtSort);
+    const fldByDate = new Map();
+    for (const e of t.pitchingEvents) {
+      const [date, evt, rv, abNum, team, xw, stadium, hand] = e;
+      if (NOT_BATTED_BALL.has(evt) || xw == null) continue;
+      const delta = (xw - rv) - lgFldBias;
+      const cur = fldByDate.get(date);
+      if (cur) { cur.sum += delta; cur.count++; }
+      else fldByDate.set(date, { sum: delta, count: 1, abNum, team, stadium, hand });
+    }
+    t.fieldingEvents = [];
+    for (const [date, g] of fldByDate) {
+      t.fieldingEvents.push([date, 'fielding', round3(curLC.lgwOBA + g.sum), g.abNum, g.team, null, g.stadium, g.hand]);
+    }
+    t.fieldingEvents.sort(evtSort);
+    t.events = t.battingEvents;
     t.bsr = Math.round(t.bsr * 10) / 10;
+    t.def_runs = Math.round(t.def_runs * 10) / 10;
   }
 
   return [...teams.values()];
 }
 
-function getPlayersForTeam(teamAbbr) {
+function getPlayersForTeam(teamAbbr, type) {
   if (groupBy === 'team-asis') {
-    return DATA.players.filter(p => p.team === teamAbbr);
+    const td = getTeamData(teamAbbr);
+    if (td) {
+      const list = type === 'pitcher' ? (td.pitchers || []) : (td.batters || []);
+      return list.filter(p => (p.playerType || 'batter') === type);
+    }
+  }
+  if (!DATA || !DATA.players) return [];
+  const typedPlayers = DATA.players.filter(p => (p.playerType || 'batter') === type);
+  if (groupBy === 'team-asis') {
+    return typedPlayers.filter(p => p.team === teamAbbr);
   }
   const result = [];
-  for (const p of DATA.players) {
+  for (const p of typedPlayers) {
     const teamEvents = p.events.filter(e => e[4] === teamAbbr);
     if (teamEvents.length > 0) {
       result.push({ ...p, events: teamEvents });
@@ -483,7 +869,7 @@ function getPlayersForTeam(teamAbbr) {
   return result;
 }
 
-function computeStats(events) {
+function computeStats(events, isPitcher) {
   let pa = 0, hits = 0, walks = 0, wobaN = 0, wobaD = 0;
   let xwobaN = 0, xwobaD = 0;
   let pfSum = 0, pfCount = 0;
@@ -493,7 +879,7 @@ function computeStats(events) {
     if (HIT_EVENTS.has(evt)) hits++;
     if (WALK_EVENTS.has(evt)) walks++;
     wobaN += rv;
-    pfSum += getParkFactor(stadium, hand);
+    pfSum += getParkFactor(stadium, hand, evt);
     pfCount++;
     if (!WOBA_DENOM_EXCLUDE.has(evt)) {
       wobaD++;
@@ -504,11 +890,90 @@ function computeStats(events) {
   const woba = wobaD > 0 ? wobaN / wobaD : 0;
   const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
   const meanPF = pfCount > 0 ? pfSum / pfCount : 1.0;
-  const wrc_plus = Math.round(
+  let wrc_plus = Math.round(
     ((wraaPerPa + curLC.lgRPA + (curLC.lgRPA - meanPF * curLC.lgRPA)) / curLC.lgRPA) * 100
   );
+  if (isPitcher) wrc_plus = 200 - wrc_plus;
   const xwoba = xwobaD > 0 ? xwobaN / xwobaD : 0;
   return { pa, hits, walks, woba, wrc_plus, xwoba };
+}
+
+function computeTeamNetMetricPoints(batEvents, pitEvents, bsrEvents, fldEvents, paCount) {
+  const merged = [];
+  for (const e of batEvents || []) merged.push({ e, src: 'bat' });
+  for (const e of pitEvents || []) merged.push({ e, src: 'pit' });
+  for (const e of bsrEvents || []) merged.push({ e, src: 'bsr' });
+  for (const e of fldEvents || []) merged.push({ e, src: 'fld' });
+  merged.sort((a, b) => a.e[0] < b.e[0] ? -1 : a.e[0] > b.e[0] ? 1 : a.e[3] - b.e[3]);
+
+  const useRolling = viewMode === 'pa';
+  let batWN = 0, batWD = 0, batPFS = 0, batPFC = 0, batPC = 0;
+  let pitWN = 0, pitWD = 0, pitPFS = 0, pitPFC = 0, pitPC = 0;
+  let bsrAcc = 0, fldAcc = 0;
+  let batActualR = 0, pitActualR = 0;
+  const netWin = [];
+  const points = [];
+
+  for (const { e, src } of merged) {
+    const [dateStr, evt, rv, , , , stadium, hand] = e;
+    const inD = !WOBA_DENOM_EXCLUDE.has(evt);
+    const pf = getParkFactor(stadium, hand, evt);
+    const ar = (src === 'bat' || src === 'pit') ? (e[8] || 0) : 0;
+    const entry = { src, rv, inD, pf, delta: 0, ar };
+
+    if (src === 'bat') {
+      batWN += rv; if (inD) batWD++; batPFS += pf; batPFC++; batPC++;
+      batActualR += ar;
+    } else if (src === 'pit') {
+      pitWN += rv; if (inD) pitWD++; pitPFS += pf; pitPFC++; pitPC++;
+      pitActualR += ar;
+    } else {
+      entry.delta = rv - curLC.lgwOBA;
+      if (src === 'bsr') bsrAcc += entry.delta;
+      else fldAcc += entry.delta;
+    }
+    netWin.push(entry);
+
+    if (useRolling) {
+      while (netWin.length > paCount) {
+        const o = netWin.shift();
+        if (o.src === 'bat') { batWN -= o.rv; if (o.inD) batWD--; batPFS -= o.pf; batPFC--; batPC--; batActualR -= o.ar; }
+        else if (o.src === 'pit') { pitWN -= o.rv; if (o.inD) pitWD--; pitPFS -= o.pf; pitPFC--; pitPC--; pitActualR -= o.ar; }
+        else if (o.src === 'bsr') bsrAcc -= o.delta;
+        else fldAcc -= o.delta;
+      }
+    }
+
+    const totalPA = batPC + pitPC;
+    const minP = useRolling ? Math.min(paCount, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA;
+    if (netWin.length >= minP && totalPA > 0 && (batWD > 0 || pitWD > 0)) {
+      let batWrc = 100;
+      if (batWD > 0) {
+        const w = batWN / batWD;
+        const wraa = (w - curLC.lgwOBA) / curLC.wOBAScale;
+        const mpf = batPFC > 0 ? batPFS / batPFC : 1.0;
+        batWrc = ((wraa + curLC.lgRPA + (curLC.lgRPA - mpf * curLC.lgRPA)) / curLC.lgRPA) * 100;
+      }
+      let oWrc = 100;
+      if (pitWD > 0) {
+        const w = pitWN / pitWD;
+        const wraa = (w - curLC.lgwOBA) / curLC.wOBAScale;
+        const mpf = pitPFC > 0 ? pitPFS / pitPFC : 1.0;
+        oWrc = 200 - ((wraa + curLC.lgRPA + (curLC.lgRPA - mpf * curLC.lgRPA)) / curLC.lgRPA) * 100;
+      }
+      const batRAA = (batWrc - 100) / 100 * curLC.lgRPA * batPC;
+      const pitRAA = (oWrc - 100) / 100 * curLC.lgRPA * pitPC;
+      const netWrcPlus = 100 + (batRAA + pitRAA + bsrAcc + fldAcc) / (curLC.lgRPA * totalPA) * 100;
+
+      const batRAboveAvg = batActualR - curLC.lgRPA * batPC;
+      const pitRAboveAvg = pitActualR - curLC.lgRPA * pitPC;
+      const netRunsPlus = 100 + (batRAboveAvg - pitRAboveAvg) / (curLC.lgRPA * totalPA) * 100;
+
+      points.push({ date: dateStr, wrcPlus: netWrcPlus, netRunsPlus, paNum: netWin.length });
+    }
+  }
+
+  return points;
 }
 
 /* ================================================================
@@ -523,17 +988,27 @@ function buildCompressedScale(allTimestamps) {
   const COMPRESSED_GAP = 5;  // visual days for an offseason gap
 
   const positions = [0];
-  const breaks = [];  // x-positions of offseason breaks
+  const breaks = [];
   for (let i = 1; i < sorted.length; i++) {
     const gapDays = (sorted[i] - sorted[i - 1]) / MS_PER_DAY;
     if (gapDays > MAX_GAP) {
       positions.push(positions[i - 1] + COMPRESSED_GAP);
-      breaks.push(positions[i - 1] + COMPRESSED_GAP / 2);
+      breaks.push({
+        frac: (positions[i - 1] + COMPRESSED_GAP / 2),
+        yearAfter: new Date(sorted[i]).getFullYear(),
+      });
     } else {
       positions.push(positions[i - 1] + gapDays);
     }
   }
   const total = positions[positions.length - 1] || 1;
+  for (const b of breaks) b.frac /= total;
+
+  const dataMonths = new Set();
+  for (const t of sorted) {
+    const d = new Date(t);
+    dataMonths.add(d.getFullYear() * 100 + d.getMonth());
+  }
 
   function scale(t) {
     let lo = 0, hi = sorted.length - 1;
@@ -547,49 +1022,284 @@ function buildCompressedScale(allTimestamps) {
     return (positions[lo] + frac * (positions[hi] - positions[lo])) / total;
   }
 
-  return { scale, ticks: sorted, breaks };
+  return { scale, ticks: sorted, breaks, dataMonths };
 }
 
 /* ================================================================
    RENDER
    ================================================================ */
+function getShellStatsKey() {
+  if (viewMode !== 'season') return 'all';
+  const yrs = [...selectedYears].sort();
+  if (SHELL && yrs.length === SHELL.years_available.length) return 'all';
+  if (yrs.length === 1) return String(yrs[0]);
+  return 'all';
+}
+
+const WIN_PCT_TD = '<td class="col-num col-win-pct">–</td>';
+
+function formatWinPct(winPct) {
+  if (winPct == null) return '–';
+  const s = winPct.toFixed(3);
+  return s.startsWith('0.') ? s.slice(1) : s;
+}
+
+function getShellTeamWinPct(abbr) {
+  if (!SHELL) return null;
+  const st = SHELL.teams.find(t => t.abbr === abbr);
+  if (!st) return null;
+  const s = st.stats_by_year[getShellStatsKey()] || st.stats_by_year['all'] || {};
+  return s.win_pct ?? null;
+}
+
+function teamWinPctTd(winPct) {
+  if (winPct == null) return WIN_PCT_TD;
+  return `<td class="col-num col-win-pct">${formatWinPct(winPct)}</td>`;
+}
+
+function setWinPctColumnVisible(visible) {
+  document.querySelectorAll('.col-win-pct').forEach(el => {
+    el.style.display = visible ? '' : 'none';
+  });
+}
+
 function render() {
   const q = document.getElementById('search').value.trim().toLowerCase();
   const minPA = Math.max(1, parseInt(document.getElementById('minPA').value, 10) || 1);
   const isTeam = groupBy.startsWith('team');
+  setWinPctColumnVisible(isTeam);
   const paCount = isTeam ? PA_WINDOWS[paWindowKey].team : PA_WINDOWS[paWindowKey].player;
   const playerPaCount = PA_WINDOWS[paWindowKey].player;
 
   const nameHeader = document.querySelector('#thead-row th[data-key="name"]');
   nameHeader.childNodes[0].textContent = isTeam ? 'Team ' : 'Player ';
 
-  const source = isTeam ? buildTeamRows(groupBy) : DATA.players;
+  document.getElementById('search').placeholder = isTeam ? 'Search team…' :
+    playerTypeFilter === 'pitcher' ? 'Search pitcher…' : 'Search player…';
+
+  const needsPlayers = !isTeam || groupBy !== 'team-asis';
+  if (needsPlayers && (!DATA || !DATA.players)) {
+    if (!isTeam) {
+      document.getElementById('tbody').innerHTML =
+        '<tr><td colspan="12" style="text-align:center;padding:20px;color:#6b7280">Loading player data…</td></tr>';
+      return;
+    }
+  }
+
+  let source;
+  if (isTeam) {
+    const anyTeamLoaded = SHELL && SHELL.teams.some(t => getTeamData(t.abbr));
+    source = (groupBy === 'team-asis' && anyTeamLoaded) ? buildTeamRows(groupBy)
+           : (DATA && DATA.players) ? buildTeamRows(groupBy) : null;
+  } else {
+    const filteredPlayers = playerTypeFilter === 'all'
+      ? DATA.players
+      : DATA.players.filter(p => (p.playerType || 'batter') === playerTypeFilter);
+    source = filteredPlayers;
+  }
+
+  const currentYear = DATA.years_available[DATA.years_available.length - 1];
+
+  // Shell-only fast path: render table with pre-computed stats, no charts
+  if (isTeam && !source && SHELL) {
+    const statsKey = getShellStatsKey();
+    const shellRows = [];
+    for (const st of SHELL.teams) {
+      if (q && !st.abbr.toLowerCase().includes(q)) continue;
+      const s = st.stats_by_year[statsKey] || st.stats_by_year['all'] || {};
+      if ((s.pa || 0) < minPA) continue;
+      shellRows.push({
+        name: st.abbr, team: st.abbr,
+        pa: s.pa || 0,
+        wrc_plus: s.wrc_plus,
+        owrc_plus: s.owrc_plus,
+        bsr_plus: s.bsr_plus,
+        def_plus: s.def_plus,
+        net_wrc_plus: s.net_wrc_plus,
+        net_runs_plus: s.net_runs_plus,
+        win_pct: s.win_pct ?? null,
+        isTeamRow: true, _shellOnly: true,
+      });
+    }
+    const dir = sort.dir === 'desc' ? -1 : 1;
+    if (sort.key === 'name') shellRows.sort((a, b) => dir * a.name.localeCompare(b.name));
+    else shellRows.sort((a, b) => {
+      const av = a[sort.key]; const bv = b[sort.key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1; if (bv == null) return -1;
+      return dir * (av - bv);
+    });
+    document.querySelectorAll('#thead-row th[data-key]').forEach(th => {
+      const active = th.dataset.key === sort.key;
+      th.classList.toggle('active', active);
+      th.querySelector('.arrow').textContent = active ? (sort.dir === 'desc' ? '▼' : '▲') : '';
+    });
+    document.getElementById('count').textContent = `${shellRows.length} teams`;
+    const tbody = document.getElementById('tbody');
+    tbody.innerHTML = '';
+    canvasMap.clear(); pointsMap.clear(); lineMap.clear(); xLineMap.clear();
+    const frag = document.createDocumentFragment();
+    shellRows.forEach((r, i) => {
+      const tr = document.createElement('tr');
+      tr.classList.add('team-row');
+      tr.innerHTML = `
+        <td class="col-rank">${i + 1}</td>
+        <td class="col-name" title="${r.name}"><span class="expand-arrow">▶</span> ${r.name}</td>
+        <td class="col-team"></td>
+        <td class="col-num">${r.net_wrc_plus ?? '–'}</td>
+        <td class="col-num">${r.net_runs_plus ?? '–'}</td>
+        <td class="col-num">${r.wrc_plus ?? '–'}</td>
+        <td class="col-num">${r.owrc_plus ?? '–'}</td>
+        <td class="col-num">${r.pa}</td>
+        <td class="col-num">${r.bsr_plus ?? '–'}</td>
+        <td class="col-num">${r.def_plus ?? '–'}</td>
+        ${teamWinPctTd(r.win_pct)}
+        <td class="col-chart"><div style="color:#9ca3af;font-size:12px;padding:8px">Loading…</div></td>`;
+      tr.addEventListener('click', () => {
+        if (expandedTeams.has(r.team)) expandedTeams.delete(r.team);
+        else expandedTeams.add(r.team);
+        loadTeamData(r.team).then(() => render());
+      });
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+    return;
+  }
+
+  if (!source) return;
 
   const rows = [];
   const allTimestamps = [];
   for (const p of source) {
-    const { display, stats } = getEventsForEntity(p, paCount);
-    if (display.length === 0) continue;
-    const s = computeStats(stats);
-    if (s.pa < minPA) continue;
-    if (q && !p.name.toLowerCase().includes(q)) continue;
-    rows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats, _paCount: paCount });
-    for (const [d] of display) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
+    if (isTeam) {
+      const batEntity = { events: p.battingEvents };
+      const pitEntity = { events: p.pitchingEvents };
+      const { display: batDisplay, stats: batStats } = getEventsForEntity(batEntity, paCount);
+      const { display: pitDisplay, stats: pitStats } = getEventsForEntity(pitEntity, paCount);
+      if (batDisplay.length === 0 && pitDisplay.length === 0) continue;
+      const batS = computeStats(batStats, false);
+      const pitS = computeStats(pitStats, true);
+      if (viewMode === 'pa') {
+        const curSeasonPA = batDisplay.filter(e => parseInt(e[0].substring(0, 4)) === currentYear).length;
+        if (curSeasonPA < minPA) continue;
+      } else {
+        if (batS.pa < minPA) continue;
+      }
+      if (q && !p.name.toLowerCase().includes(q)) continue;
+      const spEntity = { events: p.spEvents || [] };
+      const rpEntity = { events: p.rpEvents || [] };
+      const { display: spDisplay, stats: spStats } = getEventsForEntity(spEntity, paCount);
+      const { display: rpDisplay, stats: rpStats } = getEventsForEntity(rpEntity, paCount);
+      const bsrEntity = { events: p.baserunningEvents || [] };
+      const fldEntity = { events: p.fieldingEvents || [] };
+      const { display: bsrDisplay, stats: bsrStats } = getEventsForEntity(bsrEntity, paCount);
+      const { display: fldDisplay, stats: fldStats } = getEventsForEntity(fldEntity, paCount);
+      const fldRunsFromEvts = fldStats.reduce((s, e) => s + (e[2] - curLC.lgwOBA), 0);
+      const teamBsrPlus = batS.pa > 0 ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * batS.pa) * 100) : null;
+      const teamDefPlus = fldStats.length > 0 ? Math.round(fldRunsFromEvts * 10) / 10 : null;
+      const netMetricSource = {
+        bat: viewMode === 'pa' ? batDisplay : batStats,
+        pit: viewMode === 'pa' ? pitDisplay : pitStats,
+        bsr: viewMode === 'pa' ? bsrDisplay : bsrStats,
+        fld: viewMode === 'pa' ? fldDisplay : fldStats,
+      };
+      const netMetricPts = computeTeamNetMetricPoints(
+        netMetricSource.bat, netMetricSource.pit, netMetricSource.bsr, netMetricSource.fld, paCount
+      );
+      const lastNetMetric = netMetricPts.length ? netMetricPts[netMetricPts.length - 1] : null;
+      rows.push({
+        ...p, ...batS,
+        owrc_plus: pitS.wrc_plus,
+        bsr_plus: teamBsrPlus,
+        def_plus: teamDefPlus,
+        fld_runs: Math.round(fldRunsFromEvts * 10) / 10,
+        net_runs_plus: lastNetMetric ? Math.round(lastNetMetric.netRunsPlus) : null,
+        net_wrc_plus: lastNetMetric ? Math.round(lastNetMetric.wrcPlus) : null,
+        win_pct: getShellTeamWinPct(p.team),
+        pitching_xwoba: pitS.xwoba,
+        pitching_pa: pitS.pa,
+        _battingDisplayEvts: batDisplay,
+        _battingStatEvts: batStats,
+        _pitchingDisplayEvts: pitDisplay,
+        _pitchingStatEvts: pitStats,
+        _spDisplayEvts: spDisplay,
+        _spStatEvts: spStats,
+        _rpDisplayEvts: rpDisplay,
+        _rpStatEvts: rpStats,
+        _offDisplayEvts: [...batDisplay, ...bsrDisplay].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]),
+        _offStatEvts: [...batStats, ...bsrStats].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]),
+        _defDisplayEvts: [...pitDisplay, ...fldDisplay].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]),
+        _defStatEvts: [...pitStats, ...fldStats].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]),
+        _bsrDisplayEvts: bsrDisplay,
+        _bsrStatEvts: bsrStats,
+        _fldDisplayEvts: fldDisplay,
+        _fldStatEvts: fldStats,
+        _displayEvts: batDisplay,
+        _statEvts: batStats,
+        _paCount: paCount,
+        isPitcher: false,
+        isTeamRow: true,
+      });
+      for (const [d] of batDisplay) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
+      for (const [d] of pitDisplay) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
+      for (const [d] of bsrDisplay) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
+    } else {
+      const { display, stats } = getEventsForEntity(p, paCount);
+      if (display.length === 0) continue;
+      const isPitcher = (p.playerType || 'batter') === 'pitcher';
+      const s = computeStats(stats, isPitcher);
+      if (viewMode === 'pa') {
+        const curSeasonPA = display.filter(e => parseInt(e[0].substring(0, 4)) === currentYear).length;
+        if (curSeasonPA < minPA) continue;
+      } else {
+        if (s.pa < minPA) continue;
+      }
+      if (q && !p.name.toLowerCase().includes(q)) continue;
+      const playerBsrP = (!isPitcher && s.pa > 0) ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * s.pa) * 100) : null;
+      rows.push({
+        ...p, ...s,
+        wrc_plus: isPitcher ? null : s.wrc_plus,
+        owrc_plus: isPitcher ? s.wrc_plus : null,
+        bsr_plus: playerBsrP,
+        def_plus: null,
+        _displayEvts: display, _statEvts: stats, _paCount: paCount, isPitcher,
+        _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+      });
+      for (const [d] of display) allTimestamps.push(new Date(d + 'T12:00:00').getTime());
+    }
   }
 
   compressedX = buildCompressedScale(allTimestamps);
 
-  // Compute dynamic y-axis max: largest per-game positive run-value total across all visible entities
   let maxGameRV = Y_MAX_DEFAULT;
   for (const r of rows) {
-    const byDate = new Map();
-    for (const e of r._displayEvts) {
-      const d = e[0];
-      if (!byDate.has(d)) byDate.set(d, 0);
-      if (e[2] > 0) byDate.set(d, byDate.get(d) + e[2]);
-    }
-    for (const total of byDate.values()) {
-      if (total > maxGameRV) maxGameRV = total;
+    if (r.isTeamRow) {
+      const byDate = new Map();
+      for (const e of (r._battingDisplayEvts || [])) {
+        if (e[2] > 0) byDate.set(e[0], (byDate.get(e[0]) || 0) + e[2]);
+      }
+      for (const e of (r._pitchingDisplayEvts || [])) {
+        if (e[2] > 0) byDate.set(e[0], (byDate.get(e[0]) || 0) + e[2]);
+      }
+      for (const e of (r._bsrDisplayEvts || [])) {
+        const rv = e[2] - curLC.lgwOBA;
+        if (rv > 0) byDate.set(e[0], (byDate.get(e[0]) || 0) + rv);
+      }
+      for (const e of (r._fldDisplayEvts || [])) {
+        const rv = e[2] - curLC.lgwOBA;
+        if (rv > 0) byDate.set(e[0], (byDate.get(e[0]) || 0) + rv);
+      }
+      for (const total of byDate.values()) {
+        if (total > maxGameRV) maxGameRV = total;
+      }
+    } else {
+      const byDate = new Map();
+      for (const e of (r._displayEvts || [])) {
+        if (e[2] > 0) byDate.set(e[0], (byDate.get(e[0]) || 0) + e[2]);
+      }
+      for (const total of byDate.values()) {
+        if (total > maxGameRV) maxGameRV = total;
+      }
     }
   }
   yMax = maxGameRV * 1.05;
@@ -598,7 +1308,13 @@ function render() {
   if (sort.key === 'name') {
     rows.sort((a, b) => dir * a.name.localeCompare(b.name));
   } else {
-    rows.sort((a, b) => dir * (a[sort.key] - b[sort.key]));
+    rows.sort((a, b) => {
+      const av = a[sort.key]; const bv = b[sort.key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return dir * (av - bv);
+    });
   }
 
   document.querySelectorAll('#thead-row th[data-key]').forEach(th => {
@@ -607,7 +1323,9 @@ function render() {
     th.querySelector('.arrow').textContent = active ? (sort.dir === 'desc' ? '▼' : '▲') : '';
   });
 
-  const entityLabel = isTeam ? 'teams' : 'players';
+  const entityLabel = isTeam ? 'teams' :
+    playerTypeFilter === 'pitcher' ? 'pitchers' :
+    playerTypeFilter === 'batter' ? 'batters' : 'players';
   document.getElementById('count').textContent = `${rows.length} ${entityLabel}`;
 
   const tbody = document.getElementById('tbody');
@@ -627,12 +1345,14 @@ function render() {
         <td class="col-rank">${i + 1}</td>
         <td class="col-name" title="${r.name}"><span class="expand-arrow${expanded ? ' open' : ''}">▶</span> ${r.name}</td>
         <td class="col-team"></td>
-        <td class="col-num">${r.wrc_plus}</td>
-        <td class="col-num">${r.xwoba.toFixed(3)}</td>
+        <td class="col-num">${r.net_wrc_plus ?? '–'}</td>
+        <td class="col-num">${r.net_runs_plus ?? '–'}</td>
+        <td class="col-num">${r.wrc_plus ?? '–'}</td>
+        <td class="col-num">${r.owrc_plus ?? '–'}</td>
         <td class="col-num">${r.pa}</td>
-        <td class="col-num">${r.hits}</td>
-        <td class="col-num">${r.walks}</td>
-        <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
+        <td class="col-num">${r.bsr_plus ?? '–'}</td>
+        <td class="col-num">${r.def_plus ?? '–'}</td>
+        ${teamWinPctTd(r.win_pct)}
         <td class="col-chart"><canvas></canvas></td>`;
       tr.addEventListener('click', () => {
         if (expandedTeams.has(r.team)) expandedTeams.delete(r.team);
@@ -643,44 +1363,461 @@ function render() {
       canvasMap.set(tr.querySelector('canvas'), r);
 
       if (expanded) {
-        const players = getPlayersForTeam(r.team);
-        const playerRows = [];
-        for (const p of players) {
-          const { display, stats } = getEventsForEntity(p, playerPaCount);
-          if (display.length === 0) continue;
-          const s = computeStats(stats);
-          playerRows.push({ ...p, ...s, _displayEvts: display, _statEvts: stats, _paCount: playerPaCount });
+        // ── helper: classify pitcher as SP if they have any start (at_bat_number===1) ──
+        function splitPitcherEvents(events) {
+          const isStarter = events.some(e => e[3] === 1);
+          return isStarter ? { sp: events, rp: [] } : { sp: [], rp: events };
         }
-        playerRows.sort((a, b) => b.wrc_plus - a.wrc_plus);
-        for (const pr of playerRows) {
-          const subTr = document.createElement('tr');
-          subTr.classList.add('player-subrow');
-          subTr.innerHTML = `
-            <td class="col-rank"></td>
-            <td class="col-name" title="${pr.name}">${pr.name}</td>
-            <td class="col-team">${pr.team || ''}</td>
-            <td class="col-num">${pr.wrc_plus}</td>
-            <td class="col-num">${pr.xwoba.toFixed(3)}</td>
-            <td class="col-num">${pr.pa}</td>
-            <td class="col-num">${pr.hits}</td>
-            <td class="col-num">${pr.walks}</td>
-            <td class="col-num">${(pr.bsr ?? 0).toFixed(1)}</td>
-            <td class="col-chart"><canvas></canvas></td>`;
-          frag.appendChild(subTr);
-          canvasMap.set(subTr.querySelector('canvas'), pr);
+
+        // ── Offense section ──
+        const offKey = r.team + '-offense';
+        const offExpanded = expandedSections.has(offKey);
+        const offBatEvts = r._battingStatEvts || [];
+        const offBsrEvts = r._bsrStatEvts || [];
+        const offActualR = offBatEvts.reduce((s, e) => s + (e[8] || 0), 0);
+        const offPA = offBatEvts.length;
+        const offRPlus = offPA > 0 ? Math.round(100 + (offActualR - curLC.lgRPA * offPA) / (curLC.lgRPA * offPA) * 100) : '–';
+        const offTr = document.createElement('tr');
+        offTr.classList.add('section-row', 'parent-section');
+        offTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name"><span class="expand-arrow${offExpanded ? ' open' : ''}">▶</span> Offense</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.wrc_plus ?? '–'}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${offPA}</td>
+          <td class="col-num">${r.bsr_plus ?? '–'}</td>
+          <td class="col-num">–</td>
+          ${WIN_PCT_TD}
+          <td class="col-chart"><canvas></canvas></td>`;
+        offTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(offKey)) expandedSections.delete(offKey);
+          else expandedSections.add(offKey);
+          render();
+        });
+        frag.appendChild(offTr);
+        canvasMap.set(offTr.querySelector('canvas'), {
+          _displayEvts: r._offDisplayEvts, _statEvts: r._offStatEvts,
+          _paCount: r._paCount, isPitcher: false,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+        });
+
+        if (offExpanded) {
+        // ── Hitting section ──
+        const hitKey = r.team + '-hitting';
+        const hitExpanded = expandedSections.has(hitKey);
+        const hitTr = document.createElement('tr');
+        hitTr.classList.add('section-row', 'child-section');
+        hitTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name" style="padding-left:28px"><span class="expand-arrow${hitExpanded ? ' open' : ''}">▶</span> Hitting</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.wrc_plus ?? '–'}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.pa}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          ${WIN_PCT_TD}
+          <td class="col-chart"><canvas></canvas></td>`;
+        hitTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(hitKey)) expandedSections.delete(hitKey);
+          else expandedSections.add(hitKey);
+          render();
+        });
+        frag.appendChild(hitTr);
+        canvasMap.set(hitTr.querySelector('canvas'), {
+          _displayEvts: r._battingDisplayEvts, _statEvts: r._battingStatEvts,
+          _paCount: r._paCount, isPitcher: false,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+        });
+
+        if (hitExpanded) {
+          const hitters = getPlayersForTeam(r.team, 'batter');
+          const hitterRows = [];
+          for (const p of hitters) {
+            const { display, stats } = getEventsForEntity(p, playerPaCount);
+            if (display.length === 0) continue;
+            const s = computeStats(stats, false);
+            hitterRows.push({
+              ...p, ...s, owrc_plus: null, _displayEvts: display, _statEvts: stats,
+              _paCount: playerPaCount, isPitcher: false,
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+            });
+          }
+          hitterRows.sort((a, b) => b.wrc_plus - a.wrc_plus);
+          for (const pr of hitterRows) {
+            const subTr = document.createElement('tr');
+            subTr.classList.add('player-subrow');
+            subTr.innerHTML = `
+              <td class="col-rank"></td>
+              <td class="col-name" title="${pr.name}">${pr.name}</td>
+              <td class="col-team">${pr.team || ''}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.wrc_plus}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.pa}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              ${WIN_PCT_TD}
+              <td class="col-chart"><canvas></canvas></td>`;
+            frag.appendChild(subTr);
+            canvasMap.set(subTr.querySelector('canvas'), pr);
+          }
         }
+
+        // ── Baserunning section (inside Offense) ──
+        const bsrKey = r.team + '-baserunning';
+        const bsrExpanded = expandedSections.has(bsrKey);
+        const bsrPlus = r.pa > 0 ? Math.round(100 + (r.bsr ?? 0) / (curLC.lgRPA * r.pa) * 100) : '–';
+        const bsrTr = document.createElement('tr');
+        bsrTr.classList.add('section-row', 'child-section');
+        bsrTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name" style="padding-left:28px"><span class="expand-arrow${bsrExpanded ? ' open' : ''}">▶</span> Baserunning</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${bsrPlus}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.pa}</td>
+          <td class="col-num">${bsrPlus}</td>
+          <td class="col-num">–</td>
+          ${WIN_PCT_TD}
+          <td class="col-chart"><canvas></canvas></td>`;
+        bsrTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(bsrKey)) expandedSections.delete(bsrKey);
+          else expandedSections.add(bsrKey);
+          render();
+        });
+        frag.appendChild(bsrTr);
+        canvasMap.set(bsrTr.querySelector('canvas'), {
+          _displayEvts: r._bsrDisplayEvts, _statEvts: r._bsrStatEvts,
+          _paCount: r._paCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+        });
+
+        if (bsrExpanded) {
+          const bsrPlayers = getPlayersForTeam(r.team, 'batter');
+          const bsrPlayerRows = [];
+          for (const p of bsrPlayers) {
+            const bsrEvtsOffset = (p.baserunning_events ?? []).map(e =>
+              [e[0], e[1], round3(curLC.lgwOBA + e[2]), e[3], e[4], e[5], e[6], e[7]]);
+            const bsrEvtEntity = { events: bsrEvtsOffset };
+            const { display: bsrD, stats: bsrSt } = getEventsForEntity(bsrEvtEntity, playerPaCount);
+            const { display, stats } = getEventsForEntity(p, playerPaCount);
+            if (display.length === 0) continue;
+            const s = computeStats(stats, false);
+            const playerBsrPlus = s.pa > 0 ? Math.round(100 + (p.bsr ?? 0) / (curLC.lgRPA * s.pa) * 100) : '–';
+            bsrPlayerRows.push({
+              ...p, ...s, bsr_plus: playerBsrPlus, _displayEvts: bsrD, _statEvts: bsrSt,
+              _paCount: playerPaCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+            });
+          }
+          bsrPlayerRows.sort((a, b) => (b.bsr ?? 0) - (a.bsr ?? 0));
+          for (const pr of bsrPlayerRows) {
+            const subTr = document.createElement('tr');
+            subTr.classList.add('player-subrow');
+            subTr.innerHTML = `
+              <td class="col-rank"></td>
+              <td class="col-name" title="${pr.name}">${pr.name}</td>
+              <td class="col-team">${pr.team || ''}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.bsr_plus}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.pa}</td>
+              <td class="col-num">${pr.bsr_plus}</td>
+              <td class="col-num">–</td>
+              ${WIN_PCT_TD}
+              <td class="col-chart"><canvas></canvas></td>`;
+            frag.appendChild(subTr);
+            canvasMap.set(subTr.querySelector('canvas'), pr);
+          }
+        }
+        } // end offExpanded
+
+        // ── Defense section ──
+        const defenseKey = r.team + '-defense';
+        const defenseExpanded = expandedSections.has(defenseKey);
+        const defPitEvts = r._pitchingStatEvts || [];
+        const defFldEvts = r._fldStatEvts || [];
+        const defActualRA = defPitEvts.reduce((s, e) => s + (e[8] || 0), 0);
+        const defPitPA = defPitEvts.length;
+        const defRAPlus = defPitPA > 0 ? Math.round(200 - (100 + (defActualRA - curLC.lgRPA * defPitPA) / (curLC.lgRPA * defPitPA) * 100)) : '–';
+        const defenseTr = document.createElement('tr');
+        defenseTr.classList.add('section-row', 'parent-section');
+        defenseTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name"><span class="expand-arrow${defenseExpanded ? ' open' : ''}">▶</span> Defense</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.owrc_plus ?? '–'}</td>
+          <td class="col-num">${r.pitching_pa ?? 0}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${r.def_plus ?? '–'}</td>
+          ${WIN_PCT_TD}
+          <td class="col-chart"><canvas></canvas></td>`;
+        defenseTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(defenseKey)) expandedSections.delete(defenseKey);
+          else expandedSections.add(defenseKey);
+          render();
+        });
+        frag.appendChild(defenseTr);
+        canvasMap.set(defenseTr.querySelector('canvas'), {
+          _displayEvts: r._defDisplayEvts, _statEvts: r._defStatEvts,
+          _paCount: r._paCount, isPitcher: true,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+        });
+
+        if (defenseExpanded) {
+        // ── Starting Pitching section ──
+        const spKey = r.team + '-sp';
+        const spExpanded = expandedSections.has(spKey);
+        const spS = computeStats(r._spStatEvts || [], true);
+        const spTr = document.createElement('tr');
+        spTr.classList.add('section-row', 'child-section');
+        spTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name" style="padding-left:28px"><span class="expand-arrow${spExpanded ? ' open' : ''}">▶</span> Starting Pitching</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${spS.pa > 0 ? spS.wrc_plus : '–'}</td>
+          <td class="col-num">${spS.pa}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          ${WIN_PCT_TD}
+          <td class="col-chart"><canvas></canvas></td>`;
+        spTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(spKey)) expandedSections.delete(spKey);
+          else expandedSections.add(spKey);
+          render();
+        });
+        frag.appendChild(spTr);
+        canvasMap.set(spTr.querySelector('canvas'), {
+          _displayEvts: r._spDisplayEvts, _statEvts: r._spStatEvts,
+          _paCount: r._paCount, isPitcher: true,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+        });
+
+        if (spExpanded) {
+          const allPitchers = getPlayersForTeam(r.team, 'pitcher');
+          const spRows = [];
+          for (const p of allPitchers) {
+            const { display, stats } = getEventsForEntity(p, playerPaCount);
+            if (display.length === 0) continue;
+            const { sp: spEvts } = splitPitcherEvents(display);
+            if (spEvts.length === 0) continue;
+            const s = computeStats(spEvts, true);
+            spRows.push({
+              ...p, ...s, wrc_plus: null, owrc_plus: s.wrc_plus,
+              _displayEvts: spEvts, _statEvts: spEvts,
+              _paCount: playerPaCount, isPitcher: true,
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+            });
+          }
+          spRows.sort((a, b) => (b.owrc_plus ?? 0) - (a.owrc_plus ?? 0));
+          for (const pr of spRows) {
+            const subTr = document.createElement('tr');
+            subTr.classList.add('player-subrow');
+            subTr.innerHTML = `
+              <td class="col-rank"></td>
+              <td class="col-name" title="${pr.name}">${pr.name}</td>
+              <td class="col-team">${pr.team || ''}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.owrc_plus}</td>
+              <td class="col-num">${pr.pa}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              ${WIN_PCT_TD}
+              <td class="col-chart"><canvas></canvas></td>`;
+            frag.appendChild(subTr);
+            canvasMap.set(subTr.querySelector('canvas'), pr);
+          }
+        }
+
+        // ── Relief Pitching section ──
+        const rpKey = r.team + '-rp';
+        const rpExpanded = expandedSections.has(rpKey);
+        const rpS = computeStats(r._rpStatEvts || [], true);
+        const rpTr = document.createElement('tr');
+        rpTr.classList.add('section-row', 'child-section');
+        rpTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name" style="padding-left:28px"><span class="expand-arrow${rpExpanded ? ' open' : ''}">▶</span> Relief Pitching</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${rpS.pa > 0 ? rpS.wrc_plus : '–'}</td>
+          <td class="col-num">${rpS.pa}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          ${WIN_PCT_TD}
+          <td class="col-chart"><canvas></canvas></td>`;
+        rpTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(rpKey)) expandedSections.delete(rpKey);
+          else expandedSections.add(rpKey);
+          render();
+        });
+        frag.appendChild(rpTr);
+        canvasMap.set(rpTr.querySelector('canvas'), {
+          _displayEvts: r._rpDisplayEvts, _statEvts: r._rpStatEvts,
+          _paCount: r._paCount, isPitcher: true,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+        });
+
+        if (rpExpanded) {
+          const allPitchers2 = getPlayersForTeam(r.team, 'pitcher');
+          const rpRows = [];
+          for (const p of allPitchers2) {
+            const { display, stats } = getEventsForEntity(p, playerPaCount);
+            if (display.length === 0) continue;
+            const { rp: rpEvts } = splitPitcherEvents(display);
+            if (rpEvts.length === 0) continue;
+            const s = computeStats(rpEvts, true);
+            rpRows.push({
+              ...p, ...s, wrc_plus: null, owrc_plus: s.wrc_plus,
+              _displayEvts: rpEvts, _statEvts: rpEvts,
+              _paCount: playerPaCount, isPitcher: true,
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+            });
+          }
+          rpRows.sort((a, b) => (b.owrc_plus ?? 0) - (a.owrc_plus ?? 0));
+          for (const pr of rpRows) {
+            const subTr = document.createElement('tr');
+            subTr.classList.add('player-subrow');
+            subTr.innerHTML = `
+              <td class="col-rank"></td>
+              <td class="col-name" title="${pr.name}">${pr.name}</td>
+              <td class="col-team">${pr.team || ''}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.owrc_plus}</td>
+              <td class="col-num">${pr.pa}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              ${WIN_PCT_TD}
+              <td class="col-chart"><canvas></canvas></td>`;
+            frag.appendChild(subTr);
+            canvasMap.set(subTr.querySelector('canvas'), pr);
+          }
+        }
+
+        // ── Fielding section ──
+        const defKey = r.team + '-fielding';
+        const defExpanded = expandedSections.has(defKey);
+        const fldStatEvts = r._fldStatEvts || [];
+        const computedDefRuns = fldStatEvts.reduce((s, e) => s + (e[2] - curLC.lgwOBA), 0);
+        const computedDefRunsRound = Math.round(computedDefRuns * 10) / 10;
+        const fldPA = fldStatEvts.length;
+        const defPlus = fldPA > 0 ? Math.round(computedDefRuns * 10) / 10 : '–';
+        const defTr = document.createElement('tr');
+        defTr.classList.add('section-row', 'child-section');
+        defTr.innerHTML = `
+          <td class="col-rank"></td>
+          <td class="col-name" style="padding-left:28px"><span class="expand-arrow${defExpanded ? ' open' : ''}">▶</span> Fielding</td>
+          <td class="col-team"></td>
+          <td class="col-num">–</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${defPlus}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${fldPA}</td>
+          <td class="col-num">–</td>
+          <td class="col-num">${defPlus}</td>
+          ${WIN_PCT_TD}
+          <td class="col-chart"><canvas></canvas></td>`;
+        defTr.addEventListener('click', e => {
+          e.stopPropagation();
+          if (expandedSections.has(defKey)) expandedSections.delete(defKey);
+          else expandedSections.add(defKey);
+          render();
+        });
+        frag.appendChild(defTr);
+        canvasMap.set(defTr.querySelector('canvas'), {
+          _displayEvts: r._fldDisplayEvts, _statEvts: r._fldStatEvts,
+          _paCount: r._paCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
+          _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+        });
+
+        if (defExpanded) {
+          const teamFldEvts = r._fldDisplayEvts || [];
+          const teamFldDates = new Set(teamFldEvts.map(e => e[0]));
+          const defPlayers = getPlayersForTeam(r.team, 'batter');
+          const defPlayerRows = [];
+          for (const p of defPlayers) {
+            const { display, stats } = getEventsForEntity(p, playerPaCount);
+            if (display.length === 0) continue;
+            const s = computeStats(stats, false);
+            const playerDates = new Set(display.map(e => e[0]));
+            const playerFldEvts = teamFldEvts.filter(e => playerDates.has(e[0]));
+            const playerFldRuns = playerFldEvts.reduce((sum, e) => sum + (e[2] - curLC.lgwOBA), 0);
+            const playerFldRunsRd = Math.round(playerFldRuns * 10) / 10;
+            const playerDefPlus = playerFldEvts.length > 0 ? playerFldRunsRd : '–';
+            defPlayerRows.push({
+              ...p, ...s, def_plus: playerDefPlus, def_runs_computed: playerFldRunsRd,
+              _displayEvts: playerFldEvts, _statEvts: playerFldEvts,
+              _paCount: playerPaCount, isPitcher: false, _runsOffset: curLC.lgwOBA,
+              _hideXwoba: true, _lineOnlyLegend: true, _runsLabel: 'Runs (scaled)',
+            });
+          }
+          defPlayerRows.sort((a, b) => (b.def_runs_computed ?? 0) - (a.def_runs_computed ?? 0));
+          for (const pr of defPlayerRows) {
+            const subTr = document.createElement('tr');
+            subTr.classList.add('player-subrow');
+            subTr.innerHTML = `
+              <td class="col-rank"></td>
+              <td class="col-name" title="${pr.name}">${pr.name}</td>
+              <td class="col-team">${pr.team || ''}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.def_plus}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.pa}</td>
+              <td class="col-num">–</td>
+              <td class="col-num">${pr.def_plus}</td>
+              ${WIN_PCT_TD}
+              <td class="col-chart"><canvas></canvas></td>`;
+            frag.appendChild(subTr);
+            canvasMap.set(subTr.querySelector('canvas'), pr);
+          }
+        }
+        } // end defenseExpanded
       }
     } else {
+      const badge = playerTypeFilter === 'all'
+        ? `<span style="display:inline-block;font-size:9px;font-weight:600;color:#fff;background:${r.isPitcher ? '#e11d48' : '#2563eb'};border-radius:3px;padding:1px 4px;margin-right:4px;vertical-align:1px">${r.isPitcher ? 'P' : 'B'}</span>`
+        : '';
       tr.innerHTML = `
         <td class="col-rank">${i + 1}</td>
-        <td class="col-name" title="${r.name}">${r.name}</td>
+        <td class="col-name" title="${r.name}">${badge}${r.name}</td>
         <td class="col-team">${r.team}</td>
-        <td class="col-num">${r.wrc_plus}</td>
-        <td class="col-num">${r.xwoba.toFixed(3)}</td>
+        <td class="col-num">–</td>
+        <td class="col-num">–</td>
+        <td class="col-num">${r.wrc_plus ?? '–'}</td>
+        <td class="col-num">${r.owrc_plus ?? '–'}</td>
         <td class="col-num">${r.pa}</td>
-        <td class="col-num">${r.hits}</td>
-        <td class="col-num">${r.walks}</td>
-        <td class="col-num">${(r.bsr ?? 0).toFixed(1)}</td>
+        <td class="col-num">${r.bsr_plus ?? '–'}</td>
+        <td class="col-num">${r.def_plus ?? '–'}</td>
+        ${WIN_PCT_TD}
         <td class="col-chart"><canvas></canvas></td>`;
       frag.appendChild(tr);
       canvasMap.set(tr.querySelector('canvas'), r);
@@ -700,18 +1837,17 @@ function applyZoom() {
   const chartTds = document.querySelectorAll('td.col-chart');
   if (chartZoom === 1) {
     chartTh.style.minWidth = '';
-    chartTds.forEach(td => { td.style.minWidth = ''; td.querySelector('canvas').style.width = '100%'; });
+    chartTds.forEach(td => { td.style.minWidth = ''; const c = td.querySelector('canvas'); if (c) c.style.width = '100%'; });
   } else {
-    // Measure one cell's natural 1x width
     chartTh.style.minWidth = '';
-    chartTds.forEach(td => { td.style.minWidth = ''; td.querySelector('canvas').style.width = '100%'; });
+    chartTds.forEach(td => { td.style.minWidth = ''; const c = td.querySelector('canvas'); if (c) c.style.width = '100%'; });
     const base = (chartTds[0]?.clientWidth || 600) - 20;
     const zoomedW = base * chartZoom;
     const zoomedColW = (zoomedW + 20) + 'px';
     chartTh.style.minWidth = zoomedColW;
     chartTds.forEach(td => {
       td.style.minWidth = zoomedColW;
-      td.querySelector('canvas').style.width = zoomedW + 'px';
+      const c = td.querySelector('canvas'); if (c) c.style.width = zoomedW + 'px';
     });
   }
   drawAllCharts();
@@ -724,7 +1860,8 @@ function drawAllCharts() {
   canvasMap.forEach((row, canvas) => {
     const td = canvas.parentElement;
     const cssW = td.clientWidth - 20;
-    const cssH = 90;
+    const cssH = row.isTeamRow ? 140 : 90;
+    if (cssW <= 0) return;
     const dpr = window.devicePixelRatio || 1;
     canvas.width  = cssW * dpr;
     canvas.height = cssH * dpr;
@@ -732,11 +1869,16 @@ function drawAllCharts() {
     canvas.style.height = cssH + 'px';
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    drawChart(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH, row._paCount);
+    if (row.isTeamRow) {
+      drawTeamChart(ctx, canvas, row, cssW, cssH, row._paCount);
+    } else {
+      drawChart(ctx, canvas, row._displayEvts, row._statEvts, cssW, cssH, row._paCount, row.isPitcher, row._runsOffset, row);
+    }
   });
 }
 
 const BAR_STACK_ORDER = [
+  'caught_stealing',
   'strikeout','strikeout_double_play','field_out','force_out',
   'grounded_into_double_play','double_play','triple_play',
   'fielders_choice','fielders_choice_out','field_error',
@@ -744,9 +1886,10 @@ const BAR_STACK_ORDER = [
   'catcher_interf','other_out',
   'walk','intent_walk','hit_by_pitch',
   'single','double','triple','home_run',
+  'stolen_base',
 ];
 
-function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
+function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount, isPitcher, runsOffset, options = {}) {
   const pad = { top: 4, right: 30, bottom: 12, left: 6 };
   const pw = w - pad.left - pad.right;
   const ph = h - pad.top - pad.bottom;
@@ -780,15 +1923,23 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
   const baseY = yScale(0);
   ctx.beginPath(); ctx.moveTo(pad.left, baseY); ctx.lineTo(w - pad.right, baseY); ctx.stroke();
 
-  ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 0.5; ctx.setLineDash([2, 2]);
-  for (const bx of compressedX.breaks) {
-    const xPos = pad.left + (bx / (compressedX.ticks.length > 1 ?
-      compressedX.scale(compressedX.ticks[compressedX.ticks.length - 1]) * pw / pw : 1)) * pw;
+  // ── season break lines ─────────────────────────────────────
+  for (const brk of compressedX.breaks) {
+    const bxPx = pad.left + (1 - brk.frac) * pw;
+    ctx.strokeStyle = '#6366f1'; ctx.lineWidth = 1; ctx.globalAlpha = 0.35;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(bxPx, pad.top); ctx.lineTo(bxPx, baseY); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = '#6366f1'; ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(String(brk.yearAfter), bxPx, pad.top + 8);
+    ctx.globalAlpha = 1;
   }
-  ctx.setLineDash([]);
 
+  // ── month labels (only for months with actual data) ───────
   ctx.fillStyle = '#b0b0b0'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const dataMonths = compressedX.dataMonths || new Set();
   if (compressedX.ticks.length > 0) {
     const dStart = new Date(compressedX.ticks[0]);
     const dEnd = new Date(compressedX.ticks[compressedX.ticks.length - 1]);
@@ -796,9 +1947,9 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
     const labeledMonths = new Set();
     let cur = new Date(dStart.getFullYear(), dStart.getMonth(), 15);
     while (cur <= dEnd) {
-      const t = cur.getTime();
       const key = cur.getFullYear() * 100 + cur.getMonth();
-      if (!labeledMonths.has(key) && t >= compressedX.ticks[0] && t <= compressedX.ticks[compressedX.ticks.length - 1]) {
+      if (!labeledMonths.has(key) && dataMonths.has(key)) {
+        const t = cur.getTime();
         const label = multiYear
           ? months[cur.getMonth()] + ' ' + String(cur.getFullYear()).slice(2)
           : months[cur.getMonth()];
@@ -823,13 +1974,16 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
 
   // ── render events (scatter or stacked bar) ─────────────────
   const pts = [];
+  const isSparse = runsOffset != null;
   if (chartType === 'bar') {
-    const barW = Math.max(1, Math.min(dayWidthPx * 0.7, 8));
+    const barW = isSparse ? Math.max(4, Math.min(dayWidthPx * 0.9, 12))
+                          : Math.max(1, Math.min(dayWidthPx * 0.7, 8));
     for (const [dateStr, group] of byDate) {
       const t = new Date(dateStr + 'T12:00:00').getTime();
       const cx = xScale(t);
       const positive = group.filter(e => e[2] > 0);
-      if (positive.length === 0) {
+      const negative = group.filter(e => e[2] < 0);
+      if (positive.length === 0 && negative.length === 0) {
         pts.push({ x: cx, y: baseY, r: barW / 2 + 3, evt: 'field_out', date: dateStr, rv: 0 });
         continue;
       }
@@ -849,6 +2003,16 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
         pts.push({ x: cx, y: segTop + segH / 2, r: barW / 2 + 3, evt, date: dateStr, rv });
         curY = segTop;
       }
+      let curYDown = baseY;
+      for (const e of negative) {
+        const [, evt, rv] = e;
+        const segH = (Math.abs(rv) / yMax) * ph;
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = EVENT_COLORS[evt] || OUT_COLOR;
+        ctx.fillRect(cx - barW / 2, curYDown, barW, segH);
+        pts.push({ x: cx, y: curYDown + segH / 2, r: barW / 2 + 3, evt, date: dateStr, rv });
+        curYDown += segH;
+      }
     }
     ctx.globalAlpha = 1;
   } else {
@@ -866,11 +2030,13 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
       const [dateStr, evt, rv] = e;
       const t = new Date(dateStr + 'T12:00:00').getTime();
       const x = xScale(t) + xOff;
-      const y = yScale(rv);
+      const rawY = yScale(rv);
+      const y = Math.min(rawY, baseY + 8);
       const isOut = !EVENT_COLORS[evt];
       ctx.globalAlpha = isOut ? 0.45 : 0.8;
       ctx.fillStyle = EVENT_COLORS[evt] || OUT_COLOR;
-      ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI * 2); ctx.fill();
+      const dotR = isSparse ? 3.5 : 1.5;
+      ctx.beginPath(); ctx.arc(x, y, dotR, 0, Math.PI * 2); ctx.fill();
       pts.push({ x, y, r: 5, evt, date: dateStr, rv });
     }
     ctx.globalAlpha = 1;
@@ -884,21 +2050,26 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
   let wobaNumer = 0, wobaDenom = 0;
   let xwobaNumer = 0, xwobaDenom = 0;
   let pfSum = 0, pfCount = 0;
+  let actualRunsAcc = 0, actualPA = 0;
   const win = [];
   const linePoints = [];
   const xLinePoints = [];
+  const runsLinePoints = [];
 
   for (const e of chronological) {
     const [dateStr, evt, rv, , , xw, stadium, hand] = e;
     const inDenom = !WOBA_DENOM_EXCLUDE.has(evt);
     const xVal = (xw != null && inDenom) ? xw : (inDenom ? rv : 0);
-    const pf = getParkFactor(stadium, hand);
-    win.push({ rv, inDenom, xVal, pf });
+    const pf = getParkFactor(stadium, hand, evt);
+    const ar = e[8] || 0;
+    win.push({ rv, inDenom, xVal, pf, ar });
     wobaNumer += rv;
     xwobaNumer += xVal;
     if (inDenom) { wobaDenom++; xwobaDenom++; }
     pfSum += pf;
     pfCount++;
+    actualRunsAcc += ar;
+    actualPA++;
 
     if (useRolling) {
       while (win.length > paCount) {
@@ -908,10 +2079,12 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
         if (old.inDenom) { wobaDenom--; xwobaDenom--; }
         pfSum -= old.pf;
         pfCount--;
+        actualRunsAcc -= old.ar;
+        actualPA--;
       }
     }
 
-    const minPA = useRolling ? Math.min(paCount, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA;
+    const minPA = isSparse ? 1 : (useRolling ? Math.min(paCount, WRC_LINE_MIN_PA) : WRC_LINE_MIN_PA);
     if (win.length >= minPA && wobaDenom > 0) {
       const t = new Date(dateStr + 'T12:00:00').getTime();
       const x = xScale(t);
@@ -919,13 +2092,25 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
       const meanPF = pfCount > 0 ? pfSum / pfCount : 1.0;
       const woba = wobaNumer / wobaDenom;
       const wraaPerPa = (woba - curLC.lgwOBA) / curLC.wOBAScale;
-      const wrcPlus = ((wraaPerPa + curLC.lgRPA + (curLC.lgRPA - meanPF * curLC.lgRPA)) / curLC.lgRPA) * 100;
+      let wrcPlus = ((wraaPerPa + curLC.lgRPA + (curLC.lgRPA - meanPF * curLC.lgRPA)) / curLC.lgRPA) * 100;
+      if (isPitcher) wrcPlus = 200 - wrcPlus;
       linePoints.push({ x, y: yScaleWrc(wrcPlus), wrcPlus, paNum: win.length, date: dateStr });
 
-      const xw2 = xwobaNumer / xwobaDenom;
-      const xWraa = (xw2 - curLC.lgwOBA) / curLC.wOBAScale;
-      const xWrcPlus = ((xWraa + curLC.lgRPA) / curLC.lgRPA) * 100;
-      xLinePoints.push({ x, y: yScaleWrc(xWrcPlus), xwoba: xw2, xWrcPlus, paNum: win.length, date: dateStr });
+      if (!isSparse && !options._hideXwoba) {
+        const xw2 = xwobaNumer / xwobaDenom;
+        const xWraa = (xw2 - curLC.lgwOBA) / curLC.wOBAScale;
+        let xWrcPlus = ((xWraa + curLC.lgRPA) / curLC.lgRPA) * 100;
+        if (isPitcher) xWrcPlus = 200 - xWrcPlus;
+        xLinePoints.push({ x, y: yScaleWrc(xWrcPlus), xwoba: xw2, xWrcPlus, paNum: win.length, date: dateStr });
+      }
+
+      // Actual runs line (R scored for batters, R allowed for pitchers → 100 scale)
+      if (actualPA > 0) {
+        const rAboveAvg = actualRunsAcc - curLC.lgRPA * actualPA;
+        let runsPlus = 100 + rAboveAvg / (curLC.lgRPA * actualPA) * 100;
+        if (isPitcher) runsPlus = 200 - runsPlus;
+        runsLinePoints.push({ x, y: yScaleWrc(runsPlus), wrcPlus: runsPlus, paNum: win.length, date: dateStr, type: 'runs' });
+      }
     }
   }
 
@@ -933,7 +2118,7 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
     ctx.beginPath();
     ctx.moveTo(linePoints[0].x, linePoints[0].y);
     for (let i = 1; i < linePoints.length; i++) ctx.lineTo(linePoints[i].x, linePoints[i].y);
-    ctx.strokeStyle = WRC_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.7;
+    ctx.strokeStyle = WRC_LINE_COLOR; ctx.lineWidth = isSparse ? 2 : 1.5; ctx.globalAlpha = 0.7;
     ctx.stroke(); ctx.globalAlpha = 1;
   }
   if (xLinePoints.length > 1) {
@@ -944,10 +2129,219 @@ function drawChart(ctx, canvas, displayEvents, statEvents, w, h, paCount) {
     ctx.setLineDash([4, 3]);
     ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
+  if (runsLinePoints.length > 1) {
+    ctx.beginPath();
+    ctx.moveTo(runsLinePoints[0].x, runsLinePoints[0].y);
+    for (let i = 1; i < runsLinePoints.length; i++) ctx.lineTo(runsLinePoints[i].x, runsLinePoints[i].y);
+    ctx.strokeStyle = '#f97316'; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.6;
+    ctx.setLineDash([6, 3]);
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+
+  const legendItems = options._lineOnlyLegend ? [] : eventLegendItems(displayEvents);
+  if (linePoints.length > 1) {
+    legendItems.push({
+      color: isPitcher ? OWRC_LINE_COLOR : WRC_LINE_COLOR,
+      label: isPitcher ? 'oWRC+' : 'wRC+',
+      prefix: '— ',
+    });
+  }
+  if (xLinePoints.length > 1) {
+    legendItems.push({ color: XWOBA_LINE_COLOR, label: 'xwOBA', prefix: '┄ ' });
+  }
+  if (runsLinePoints.length > 1) {
+    legendItems.push({
+      color: '#f97316',
+      label: options._runsLabel || 'Runs (scaled)',
+      prefix: '┄ ',
+    });
+  }
+  drawCanvasLegend(ctx, pad, legendItems);
 
   pointsMap.set(canvas, pts);
   lineMap.set(canvas, linePoints);
-  xLineMap.set(canvas, xLinePoints);
+  xLineMap.set(canvas, [...xLinePoints, ...runsLinePoints]);
+}
+
+/* ================================================================
+   TEAM BUTTERFLY CHART
+   ================================================================ */
+function drawTeamChart(ctx, canvas, row, w, h, paCount) {
+  const batDisplay = row._battingDisplayEvts;
+  const pitDisplay = row._pitchingDisplayEvts;
+  const batStats = row._battingStatEvts;
+  const pitStats = row._pitchingStatEvts;
+  const spDisplay = row._spDisplayEvts || [];
+  const rpDisplay = row._rpDisplayEvts || [];
+  const spStats = row._spStatEvts || [];
+  const rpStats = row._rpStatEvts || [];
+
+  const pad = { top: 4, right: 30, bottom: 12, left: 6 };
+  const pw = w - pad.left - pad.right;
+  const ph = h - pad.top - pad.bottom;
+  const xScale = t => pad.left + (1 - compressedX.scale(t)) * pw;
+  const yScaleWrc = v => {
+    const clamped = Math.max(WRC_PLUS_MIN, Math.min(WRC_PLUS_MAX, v));
+    return pad.top + ph - ((clamped - WRC_PLUS_MIN) / (WRC_PLUS_MAX - WRC_PLUS_MIN)) * ph;
+  };
+
+  const MS_PER_DAY = 86400000;
+  const sampleT = compressedX.ticks.length > 1 ? compressedX.ticks[0] : Date.now();
+  const dayWidthPx = Math.abs(xScale(sampleT + MS_PER_DAY) - xScale(sampleT));
+
+  // ── 100 wRC+ reference line ──
+  const y100 = yScaleWrc(100);
+  ctx.strokeStyle = '#c7c7cc'; ctx.lineWidth = 0.5; ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(pad.left, y100); ctx.lineTo(w - pad.right, y100); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#9ca3af'; ctx.font = '8px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('100', w - pad.right + 3, y100 + 3);
+
+  // ── season breaks ──
+  for (const brk of compressedX.breaks) {
+    const bxPx = pad.left + (1 - brk.frac) * pw;
+    ctx.strokeStyle = '#6366f1'; ctx.lineWidth = 1; ctx.globalAlpha = 0.35;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(bxPx, pad.top); ctx.lineTo(bxPx, pad.top + ph); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = '#6366f1'; ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(String(brk.yearAfter), bxPx, pad.top + 8);
+    ctx.globalAlpha = 1;
+  }
+
+  // ── month labels ──
+  ctx.fillStyle = '#b0b0b0'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const dataMonths = compressedX.dataMonths || new Set();
+  if (compressedX.ticks.length > 0) {
+    const dStart = new Date(compressedX.ticks[0]);
+    const dEnd = new Date(compressedX.ticks[compressedX.ticks.length - 1]);
+    const multiYear = dEnd.getFullYear() - dStart.getFullYear() >= 1;
+    const labeledMonths = new Set();
+    let cur = new Date(dStart.getFullYear(), dStart.getMonth(), 15);
+    while (cur <= dEnd) {
+      const key = cur.getFullYear() * 100 + cur.getMonth();
+      if (!labeledMonths.has(key) && dataMonths.has(key)) {
+        const t = cur.getTime();
+        const label = multiYear ? monthNames[cur.getMonth()] + ' ' + String(cur.getFullYear()).slice(2) : monthNames[cur.getMonth()];
+        const xPos = xScale(t);
+        if (xPos > pad.left + 10 && xPos < w - pad.right - 10) ctx.fillText(label, xPos, h - 1);
+        labeledMonths.add(key);
+      }
+      cur.setMonth(cur.getMonth() + 1);
+    }
+  }
+
+  // ── stacked bars: all four components upward from baseline ──
+  const bsrDisplay = row._bsrDisplayEvts || [];
+  const fldDisplay = row._fldDisplayEvts || [];
+  const yScale = v => pad.top + ph - (v / yMax) * ph;
+  const baseY = yScale(0);
+
+  function sumByDate(events) {
+    const m = new Map();
+    for (const e of events) { if (e[2] > 0) m.set(e[0], (m.get(e[0]) || 0) + e[2]); }
+    return m;
+  }
+  function sumByDateOffset(events, offset) {
+    const m = new Map();
+    for (const e of events) {
+      const rv = e[2] - offset;
+      if (rv > 0) m.set(e[0], (m.get(e[0]) || 0) + rv);
+    }
+    return m;
+  }
+  const batSums = sumByDate(batDisplay);
+  const spSums = sumByDate(spDisplay);
+  const rpSums = sumByDate(rpDisplay);
+  const bsrSums = sumByDateOffset(bsrDisplay, curLC.lgwOBA);
+  const fldSums = sumByDateOffset(fldDisplay, curLC.lgwOBA);
+  const allBarDates = new Set([...batSums.keys(), ...spSums.keys(), ...rpSums.keys(), ...bsrSums.keys(), ...fldSums.keys()]);
+
+  const pts = [];
+  const barW = Math.max(1, Math.min(dayWidthPx * 0.7, 8));
+
+  const barLayers = [
+    { sums: fldSums, color: DEF_BAR_COLOR, alpha: 0.55, evt: 'fielding', side: 'fld' },
+    { sums: rpSums, color: RP_BAR_COLOR, alpha: 0.55, evt: 'relief pitching', side: 'rp' },
+    { sums: spSums, color: OWRC_LINE_COLOR, alpha: 0.55, evt: 'starting pitching', side: 'sp' },
+    { sums: bsrSums, color: BSR_BAR_COLOR, alpha: 0.6, evt: 'baserunning', side: 'bsr' },
+    { sums: batSums, color: WRC_LINE_COLOR, alpha: 0.7, evt: 'hitting', side: 'bat' },
+  ];
+
+  for (const dateStr of allBarDates) {
+    const t = new Date(dateStr + 'T12:00:00').getTime();
+    const cx = xScale(t);
+    let curY = baseY;
+    for (const layer of barLayers) {
+      const rv = layer.sums.get(dateStr) || 0;
+      if (rv > 0) {
+        const segH = (rv / yMax) * ph;
+        ctx.globalAlpha = layer.alpha;
+        ctx.fillStyle = layer.color;
+        ctx.fillRect(cx - barW / 2, curY - segH, barW, segH);
+        pts.push({ x: cx, y: curY - segH / 2, r: barW / 2 + 3, evt: layer.evt, date: dateStr, rv, side: layer.side });
+        curY -= segH;
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // ── compute Net wRC+ and Net Runs (scaled) lines from all components ──
+  const bsrEvts = viewMode === 'pa' ? bsrDisplay : (row._bsrStatEvts || []);
+  const fldEvts = viewMode === 'pa' ? fldDisplay : (row._fldStatEvts || []);
+  const batEvtsForLine = viewMode === 'pa' ? batDisplay : batStats;
+  const pitEvtsForLine = viewMode === 'pa' ? pitDisplay : pitStats;
+
+  const netMetricPts = computeTeamNetMetricPoints(batEvtsForLine, pitEvtsForLine, bsrEvts, fldEvts, paCount);
+  const netWrcPts = netMetricPts.map(p => ({
+    x: xScale(new Date(p.date + 'T12:00:00').getTime()),
+    date: p.date,
+    wrcPlus: p.wrcPlus,
+    paNum: p.paNum,
+    type: 'net-wrc',
+  }));
+  const netRunsPts = netMetricPts.map(p => ({
+    x: xScale(new Date(p.date + 'T12:00:00').getTime()),
+    date: p.date,
+    wrcPlus: p.netRunsPlus,
+    paNum: p.paNum,
+    type: 'net-runs',
+  }));
+
+  // ── draw Net wRC+ line (solid, dark) ──
+  const nwrcLine = netWrcPts.map(p => ({ ...p, y: yScaleWrc(p.wrcPlus) }));
+  if (nwrcLine.length > 1) {
+    ctx.beginPath(); ctx.moveTo(nwrcLine[0].x, nwrcLine[0].y);
+    for (let i = 1; i < nwrcLine.length; i++) ctx.lineTo(nwrcLine[i].x, nwrcLine[i].y);
+    ctx.strokeStyle = '#1e1b4b'; ctx.lineWidth = 2; ctx.globalAlpha = 0.85;
+    ctx.stroke(); ctx.globalAlpha = 1;
+  }
+
+  // ── draw Net Runs (scaled) line (dashed, teal) ──
+  const nrunsLine = netRunsPts.map(p => ({ ...p, y: yScaleWrc(p.wrcPlus) }));
+  if (nrunsLine.length > 1) {
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(nrunsLine[0].x, nrunsLine[0].y);
+    for (let i = 1; i < nrunsLine.length; i++) ctx.lineTo(nrunsLine[i].x, nrunsLine[i].y);
+    ctx.strokeStyle = XWOBA_LINE_COLOR; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.75;
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+
+  // ── legend: team chart only labels the two summary lines ──
+  const legendItems = [];
+  if (nwrcLine.length > 1) {
+    legendItems.push({ color: '#1e1b4b', label: 'Net wRC+', prefix: '— ' });
+  }
+  if (nrunsLine.length > 1) {
+    legendItems.push({ color: XWOBA_LINE_COLOR, label: 'Net Runs (scaled)', prefix: '┄ ' });
+  }
+  drawCanvasLegend(ctx, pad, legendItems);
+
+  pointsMap.set(canvas, pts);
+  lineMap.set(canvas, nwrcLine);
+  xLineMap.set(canvas, nrunsLine);
 }
 
 /* ================================================================
@@ -965,11 +2359,15 @@ const PRETTY = {
   sac_fly: 'Sac Fly', sac_bunt: 'Sac Bunt',
   sac_fly_double_play: 'Sac Fly (DP)', sac_bunt_double_play: 'Sac Bunt (DP)',
   catcher_interf: "Catcher's Int.", other_out: 'Out',
+  stolen_base: 'Stolen Base', caught_stealing: 'Caught Stealing',
 };
 
 document.addEventListener('mousemove', e => {
   const canvas = e.target.closest?.('canvas');
   if (!canvas || !pointsMap.has(canvas)) { tooltip.style.opacity = 0; return; }
+
+  const rowData = canvasMap.get(canvas);
+  const isPitcherRow = rowData?.isPitcher;
 
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left;
@@ -983,8 +2381,8 @@ document.addEventListener('mousemove', e => {
   }
 
   const allLines = [
-    ...(lineMap.get(canvas) || []).map(lp => ({ ...lp, type: 'wrc' })),
-    ...(xLineMap.get(canvas) || []).map(lp => ({ ...lp, type: 'xwoba' })),
+    ...(lineMap.get(canvas) || []).map(lp => ({ type: lp.type || 'wrc', ...lp })),
+    ...(xLineMap.get(canvas) || []).map(lp => ({ type: lp.type || 'xwoba', ...lp })),
   ];
   let bestLine = null, bestLineDist = 8;
   for (const lp of allLines) {
@@ -1000,18 +2398,53 @@ document.addEventListener('mousemove', e => {
     tooltip.style.opacity = 1;
     tooltip.style.left = (e.clientX + 14) + 'px';
     tooltip.style.top  = (e.clientY - 10) + 'px';
-    tooltip.innerHTML = `<strong>${PRETTY[best.evt] || best.evt}</strong><br>` +
+    const evtLabel = best.evt === 'hitting' ? 'Hitting'
+      : best.evt === 'starting pitching' ? 'Starting Pitching'
+      : best.evt === 'relief pitching' ? 'Relief Pitching'
+      : best.evt === 'pitching' ? 'Pitching'
+      : best.evt === 'baserunning' ? 'Baserunning'
+      : best.evt === 'fielding' ? 'Fielding'
+      : best.side === 'pit' || best.side === 'sp' || best.side === 'rp' ? `${PRETTY[best.evt] || best.evt} (allowed)`
+      : (PRETTY[best.evt] || best.evt);
+    tooltip.innerHTML = `<strong>${evtLabel}</strong><br>` +
       `${best.date} · Run value ${best.rv.toFixed(3)}`;
   } else if (bestLine) {
     tooltip.style.opacity = 1;
     tooltip.style.left = (e.clientX + 14) + 'px';
     tooltip.style.top  = (e.clientY - 10) + 'px';
     const windowLabel = viewMode === 'pa' ? ` (last ${bestLine.paNum} PA)` : ` · After ${bestLine.paNum} PA`;
-    if (bestLine.type === 'xwoba') {
-      tooltip.innerHTML = `<strong>xwOBA ${bestLine.xwoba.toFixed(3)}</strong> (xwRC+ ${Math.round(bestLine.xWrcPlus)})<br>` +
+    if (bestLine.type === 'net-wrc') {
+      tooltip.innerHTML = `<strong>Net wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'net-runs') {
+      tooltip.innerHTML = `<strong>Net Runs (scaled) ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'off-r') {
+      tooltip.innerHTML = `<strong>Off Runs (scaled) ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'def-ra') {
+      tooltip.innerHTML = `<strong>Def Runs Allowed (scaled) ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'runs') {
+      const rLabel = 'Runs (scaled)';
+      tooltip.innerHTML = `<strong>${rLabel} ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'bat-wrc') {
+      tooltip.innerHTML = `<strong>wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'pit-wrc') {
+      tooltip.innerHTML = `<strong>oWRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'xwoba') {
+      const xLabel = isPitcherRow ? 'oWRC+' : 'xwRC+';
+      tooltip.innerHTML = `<strong>xwOBA ${bestLine.xwoba.toFixed(3)}</strong> (${xLabel} ${Math.round(bestLine.xWrcPlus)})<br>` +
+        `${bestLine.date}${windowLabel}`;
+    } else if (bestLine.type === 'owrc') {
+      tooltip.innerHTML = `<strong>oWRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     } else {
-      tooltip.innerHTML = `<strong>wRC+ ${Math.round(bestLine.wrcPlus)}</strong><br>` +
+      const wLabel = isPitcherRow ? 'oWRC+' : 'wRC+';
+      tooltip.innerHTML = `<strong>${wLabel} ${Math.round(bestLine.wrcPlus)}</strong><br>` +
         `${bestLine.date}${windowLabel}`;
     }
   } else {
